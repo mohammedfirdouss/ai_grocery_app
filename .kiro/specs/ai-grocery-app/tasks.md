@@ -6,14 +6,14 @@ This implementation plan breaks down the AI Grocery App into discrete, manageabl
 
 ## Tasks
 
-- [-] 1. Set up project structure and core infrastructure
+- [ ] 1. Set up project structure and core infrastructure
   - Create CDK project structure with Python 3.11
   - Define core data models and interfaces
   - Set up development environment with LocalStack
   - Configure AWS CDK app with environment-specific stacks
   - _Requirements: 10.1, 10.3_
 
-- [ ] 2. Implement DynamoDB tables and data models
+- [-] 2. Implement DynamoDB tables and data models
   - [ ] 2.1 Create DynamoDB table definitions in CDK
     - Define Orders table with GSIs for customer_email and status
     - Define Products table with GSIs for category and name
