@@ -1,0 +1,2 @@
+# This directory will contain the installed Python packages for the Lambda layer
+# Run: pip install -r ../requirements.txt -t .
