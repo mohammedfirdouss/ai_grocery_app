@@ -185,7 +185,7 @@ class TestOrder:
         )
         
         avg_confidence = order.get_average_confidence()
-        assert avg_confidence == 0.90  # (0.95 + 0.85) / 2
+        assert avg_confidence == pytest.approx(0.90)  # (0.95 + 0.85) / 2
 
 
 class TestPaymentLink:

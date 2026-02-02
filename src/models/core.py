@@ -119,7 +119,7 @@ class Order(BaseModel):
     )
     
     id: str = Field(default_factory=lambda: str(uuid4()), description="Unique order ID")
-    customer_email: str = Field(..., regex=r'^[^@]+@[^@]+\.[^@]+$', description="Customer email")
+    customer_email: str = Field(..., pattern=r'^[^@]+@[^@]+\.[^@]+$', description="Customer email")
     customer_name: Optional[str] = Field(None, max_length=200, description="Customer name")
     raw_text: str = Field(..., min_length=1, max_length=5000, description="Original grocery list text")
     status: ProcessingStatus = Field(default=ProcessingStatus.SUBMITTED, description="Processing status")
