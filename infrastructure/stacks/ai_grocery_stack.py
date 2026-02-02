@@ -49,8 +49,8 @@ class AiGroceryStack(Stack):
         self.payment_links_table = self._create_payment_links_table()
         
         # Create SQS queues
-        self.processing_queue = self._create_processing_queue()
         self.dlq = self._create_dead_letter_queue()
+        self.processing_queue = self._create_processing_queue()
         
         # Create Parameter Store parameters
         self._create_parameter_store_config()
@@ -185,17 +185,15 @@ class AiGroceryStack(Stack):
     
     def _create_processing_queue(self) -> sqs.Queue:
         """Create SQS queue for order processing."""
-        dlq = self._create_dead_letter_queue()
-        
         return sqs.Queue(
             self,
             "ProcessingQueue",
             queue_name=f"ai-grocery-processing-{self.env_name}",
             visibility_timeout=Duration.seconds(self.config.sqs_visibility_timeout_seconds),
-            message_retention_period=Duration.seconds(self.config.sqs_message_retention_seconds),
+            retention_period=Duration.seconds(self.config.sqs_message_retention_seconds),
             dead_letter_queue=sqs.DeadLetterQueue(
                 max_receive_count=self.config.sqs_max_receive_count,
-                queue=dlq
+                queue=self.dlq
             ),
             encryption=sqs.QueueEncryption.KMS,
             encryption_master_key=self.kms_key
@@ -207,7 +205,7 @@ class AiGroceryStack(Stack):
             self,
             "DeadLetterQueue",
             queue_name=f"ai-grocery-dlq-{self.env_name}",
-            message_retention_period=Duration.seconds(self.config.sqs_message_retention_seconds),
+            retention_period=Duration.seconds(self.config.sqs_message_retention_seconds),
             encryption=sqs.QueueEncryption.KMS,
             encryption_master_key=self.kms_key
         )
@@ -335,14 +333,52 @@ class AiGroceryStack(Stack):
         
         return role
     
+    def _get_log_retention(self, days: int) -> logs.RetentionDays:
+        """Map days to RetentionDays enum."""
+        retention_map = {
+            1: logs.RetentionDays.ONE_DAY,
+            3: logs.RetentionDays.THREE_DAYS,
+            5: logs.RetentionDays.FIVE_DAYS,
+            7: logs.RetentionDays.ONE_WEEK,
+            14: logs.RetentionDays.TWO_WEEKS,
+            30: logs.RetentionDays.ONE_MONTH,
+            60: logs.RetentionDays.TWO_MONTHS,
+            90: logs.RetentionDays.THREE_MONTHS,
+            120: logs.RetentionDays.FOUR_MONTHS,
+            150: logs.RetentionDays.FIVE_MONTHS,
+            180: logs.RetentionDays.SIX_MONTHS,
+            365: logs.RetentionDays.ONE_YEAR,
+            400: logs.RetentionDays.THIRTEEN_MONTHS,
+            545: logs.RetentionDays.EIGHTEEN_MONTHS,
+            731: logs.RetentionDays.TWO_YEARS,
+            1096: logs.RetentionDays.THREE_YEARS,
+            1827: logs.RetentionDays.FIVE_YEARS,
+            2192: logs.RetentionDays.SIX_YEARS,
+            2557: logs.RetentionDays.SEVEN_YEARS,
+            2922: logs.RetentionDays.EIGHT_YEARS,
+            3288: logs.RetentionDays.NINE_YEARS,
+            3653: logs.RetentionDays.TEN_YEARS,
+        }
+        # Find closest matching retention period
+        if days in retention_map:
+            return retention_map[days]
+        # Default to the closest available option
+        sorted_keys = sorted(retention_map.keys())
+        for key in sorted_keys:
+            if days <= key:
+                return retention_map[key]
+        return logs.RetentionDays.ONE_YEAR
+    
     def _create_log_groups(self) -> None:
         """Create CloudWatch log groups for Lambda functions."""
+        retention = self._get_log_retention(self.config.log_retention_days)
+        
         # Log group for text parser Lambda
         logs.LogGroup(
             self,
             "TextParserLogGroup",
             log_group_name=f"/aws/lambda/ai-grocery-text-parser-{self.env_name}",
-            retention=logs.RetentionDays(self.config.log_retention_days),
+            retention=retention,
             encryption_key=self.kms_key,
             removal_policy=RemovalPolicy.DESTROY
         )
@@ -352,7 +388,7 @@ class AiGroceryStack(Stack):
             self,
             "ProductMatcherLogGroup",
             log_group_name=f"/aws/lambda/ai-grocery-product-matcher-{self.env_name}",
-            retention=logs.RetentionDays(self.config.log_retention_days),
+            retention=retention,
             encryption_key=self.kms_key,
             removal_policy=RemovalPolicy.DESTROY
         )
@@ -362,7 +398,7 @@ class AiGroceryStack(Stack):
             self,
             "PaymentProcessorLogGroup",
             log_group_name=f"/aws/lambda/ai-grocery-payment-processor-{self.env_name}",
-            retention=logs.RetentionDays(self.config.log_retention_days),
+            retention=retention,
             encryption_key=self.kms_key,
             removal_policy=RemovalPolicy.DESTROY
         )

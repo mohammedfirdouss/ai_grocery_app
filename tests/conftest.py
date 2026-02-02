@@ -5,7 +5,7 @@ Pytest configuration and fixtures for AI Grocery App tests.
 import pytest
 import os
 import boto3
-from moto import mock_dynamodb, mock_sqs, mock_secretsmanager, mock_ssm
+from moto import mock_aws
 from decimal import Decimal
 from datetime import datetime
 
@@ -79,7 +79,7 @@ def sample_order():
 @pytest.fixture
 def mock_aws_services(aws_credentials):
     """Mock AWS services for testing."""
-    with mock_dynamodb(), mock_sqs(), mock_secretsmanager(), mock_ssm():
+    with mock_aws():
         yield
 
 
