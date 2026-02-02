@@ -359,15 +359,21 @@ class AiGroceryStack(Stack):
             3288: logs.RetentionDays.NINE_YEARS,
             3653: logs.RetentionDays.TEN_YEARS,
         }
-        # Find closest matching retention period
+        
         if days in retention_map:
             return retention_map[days]
-        # Default to the closest available option
+        
+        # Find closest matching retention period (round up)
         sorted_keys = sorted(retention_map.keys())
         for key in sorted_keys:
             if days <= key:
                 return retention_map[key]
-        return logs.RetentionDays.ONE_YEAR
+        
+        # If days exceeds all options, raise an error
+        raise ValueError(
+            f"Unsupported log retention period: {days} days. "
+            f"Supported values: {sorted(retention_map.keys())}"
+        )
     
     def _create_log_groups(self) -> None:
         """Create CloudWatch log groups for Lambda functions."""

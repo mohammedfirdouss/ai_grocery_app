@@ -69,6 +69,31 @@ class TestHashEmail:
         hash2 = hash_email("test@example.com", salt)
         
         assert hash1 == hash2
+    
+    def test_hash_email_requires_salt(self):
+        """Test that hash_email raises error when salt is not provided."""
+        import os
+        
+        # Ensure env variable is not set
+        original = os.environ.pop("EMAIL_HASH_SALT", None)
+        try:
+            with pytest.raises(ValueError, match="Email hash salt is required"):
+                hash_email("test@example.com")
+        finally:
+            if original:
+                os.environ["EMAIL_HASH_SALT"] = original
+    
+    def test_hash_email_uses_env_var(self):
+        """Test that hash_email uses environment variable if salt not provided."""
+        import os
+        
+        os.environ["EMAIL_HASH_SALT"] = "env-salt"
+        try:
+            hash1 = hash_email("test@example.com")
+            hash2 = hash_email("test@example.com", "env-salt")
+            assert hash1 == hash2
+        finally:
+            del os.environ["EMAIL_HASH_SALT"]
 
 
 class TestMaskEmail:

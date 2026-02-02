@@ -113,8 +113,18 @@ def hash_email(email: str, salt: Optional[str] = None) -> str:
         
     Returns:
         Hex-encoded hash of the email.
+        
+    Raises:
+        ValueError: If salt is not provided and EMAIL_HASH_SALT environment variable is not set.
     """
-    salt = salt or os.environ.get("EMAIL_HASH_SALT", "default-salt")
+    if salt is None:
+        salt = os.environ.get("EMAIL_HASH_SALT")
+        if salt is None:
+            raise ValueError(
+                "Email hash salt is required. "
+                "Either provide 'salt' parameter or set EMAIL_HASH_SALT environment variable."
+            )
+    
     email_normalized = email.lower().strip()
     
     # Use HMAC-SHA256 for consistent, salted hashing
