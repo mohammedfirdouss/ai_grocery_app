@@ -9,8 +9,10 @@ from aws_cdk import (
     Stack,
     Duration,
     RemovalPolicy,
+    CfnOutput,
     aws_dynamodb as dynamodb,
     aws_lambda as lambda_,
+    aws_lambda_event_sources as lambda_event_sources,
     aws_sqs as sqs,
     aws_appsync as appsync,
     aws_iam as iam,
@@ -18,9 +20,12 @@ from aws_cdk import (
     aws_ssm as ssm,
     aws_secretsmanager as secretsmanager,
     aws_kms as kms,
+    aws_events as events,
+    aws_events_targets as events_targets,
+    aws_pipes as pipes,
 )
 from constructs import Construct
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from infrastructure.config.environment_config import EnvironmentConfig
 
@@ -48,9 +53,8 @@ class AiGroceryStack(Stack):
         self.products_table = self._create_products_table()
         self.payment_links_table = self._create_payment_links_table()
         
-        # Create SQS queues
-        self.dlq = self._create_dead_letter_queue()
-        self.processing_queue = self._create_processing_queue()
+        # Create SQS queues with dedicated DLQs for each processing stage
+        self._create_sqs_infrastructure()
         
         # Create Parameter Store parameters
         self._create_parameter_store_config()
@@ -58,11 +62,23 @@ class AiGroceryStack(Stack):
         # Create Secrets Manager secrets
         self._create_secrets()
         
-        # Create IAM roles (will be used by Lambda functions in later tasks)
+        # Create Lambda layer for shared dependencies
+        self.shared_layer = self._create_lambda_layer()
+        
+        # Create IAM roles for Lambda functions
         self.lambda_execution_role = self._create_lambda_execution_role()
+        
+        # Create Lambda functions
+        self._create_lambda_functions()
         
         # Create CloudWatch log groups
         self._create_log_groups()
+        
+        # Set up EventBridge and EventBridge Pipes
+        self._create_eventbridge_infrastructure()
+        
+        # Create stack outputs
+        self._create_outputs()
     
     def _create_kms_key(self) -> kms.Key:
         """Create KMS key for data encryption."""
@@ -183,32 +199,104 @@ class AiGroceryStack(Stack):
             removal_policy=RemovalPolicy.DESTROY if self.env_name == "dev" else RemovalPolicy.RETAIN
         )
     
-    def _create_processing_queue(self) -> sqs.Queue:
-        """Create SQS queue for order processing."""
-        return sqs.Queue(
+    def _create_sqs_infrastructure(self) -> None:
+        """Create comprehensive SQS infrastructure with dedicated queues and DLQs."""
+        
+        # Main dead letter queue for general failures
+        self.main_dlq = sqs.Queue(
             self,
-            "ProcessingQueue",
-            queue_name=f"ai-grocery-processing-{self.env_name}",
+            "MainDeadLetterQueue",
+            queue_name=f"ai-grocery-main-dlq-{self.env_name}",
+            retention_period=Duration.seconds(self.config.sqs_message_retention_seconds),
+            encryption=sqs.QueueEncryption.KMS,
+            encryption_master_key=self.kms_key
+        )
+        
+        # Text Parser DLQ and Queue
+        self.text_parser_dlq = sqs.Queue(
+            self,
+            "TextParserDLQ",
+            queue_name=f"ai-grocery-text-parser-dlq-{self.env_name}",
+            retention_period=Duration.seconds(self.config.sqs_message_retention_seconds),
+            encryption=sqs.QueueEncryption.KMS,
+            encryption_master_key=self.kms_key
+        )
+        
+        self.text_parser_queue = sqs.Queue(
+            self,
+            "TextParserQueue",
+            queue_name=f"ai-grocery-text-parser-{self.env_name}",
             visibility_timeout=Duration.seconds(self.config.sqs_visibility_timeout_seconds),
             retention_period=Duration.seconds(self.config.sqs_message_retention_seconds),
             dead_letter_queue=sqs.DeadLetterQueue(
                 max_receive_count=self.config.sqs_max_receive_count,
-                queue=self.dlq
+                queue=self.text_parser_dlq
             ),
             encryption=sqs.QueueEncryption.KMS,
             encryption_master_key=self.kms_key
         )
-    
-    def _create_dead_letter_queue(self) -> sqs.Queue:
-        """Create dead letter queue for failed messages."""
-        return sqs.Queue(
+        
+        # Product Matcher DLQ and Queue
+        self.product_matcher_dlq = sqs.Queue(
             self,
-            "DeadLetterQueue",
-            queue_name=f"ai-grocery-dlq-{self.env_name}",
+            "ProductMatcherDLQ",
+            queue_name=f"ai-grocery-product-matcher-dlq-{self.env_name}",
             retention_period=Duration.seconds(self.config.sqs_message_retention_seconds),
             encryption=sqs.QueueEncryption.KMS,
             encryption_master_key=self.kms_key
         )
+        
+        self.product_matcher_queue = sqs.Queue(
+            self,
+            "ProductMatcherQueue",
+            queue_name=f"ai-grocery-product-matcher-{self.env_name}",
+            visibility_timeout=Duration.seconds(self.config.sqs_visibility_timeout_seconds * 2),  # Longer for AI processing
+            retention_period=Duration.seconds(self.config.sqs_message_retention_seconds),
+            dead_letter_queue=sqs.DeadLetterQueue(
+                max_receive_count=self.config.sqs_max_receive_count,
+                queue=self.product_matcher_dlq
+            ),
+            encryption=sqs.QueueEncryption.KMS,
+            encryption_master_key=self.kms_key
+        )
+        
+        # Payment Processor DLQ and Queue
+        self.payment_processor_dlq = sqs.Queue(
+            self,
+            "PaymentProcessorDLQ",
+            queue_name=f"ai-grocery-payment-processor-dlq-{self.env_name}",
+            retention_period=Duration.seconds(self.config.sqs_message_retention_seconds),
+            encryption=sqs.QueueEncryption.KMS,
+            encryption_master_key=self.kms_key
+        )
+        
+        self.payment_processor_queue = sqs.Queue(
+            self,
+            "PaymentProcessorQueue",
+            queue_name=f"ai-grocery-payment-processor-{self.env_name}",
+            visibility_timeout=Duration.seconds(self.config.sqs_visibility_timeout_seconds),
+            retention_period=Duration.seconds(self.config.sqs_message_retention_seconds),
+            dead_letter_queue=sqs.DeadLetterQueue(
+                max_receive_count=self.config.sqs_max_receive_count,
+                queue=self.payment_processor_dlq
+            ),
+            encryption=sqs.QueueEncryption.KMS,
+            encryption_master_key=self.kms_key
+        )
+        
+        # EventBridge DLQ for failed event processing
+        self.eventbridge_dlq = sqs.Queue(
+            self,
+            "EventBridgeDLQ",
+            queue_name=f"ai-grocery-eventbridge-dlq-{self.env_name}",
+            retention_period=Duration.seconds(self.config.sqs_message_retention_seconds),
+            encryption=sqs.QueueEncryption.KMS,
+            encryption_master_key=self.kms_key
+        )
+        
+        # Legacy processing queue for backward compatibility
+        self.dlq = self.main_dlq  # Alias for backward compatibility
+        self.processing_queue = self.text_parser_queue  # Alias for backward compatibility
     
     def _create_parameter_store_config(self) -> None:
         """Create Parameter Store parameters for configuration."""
@@ -226,7 +314,7 @@ class AiGroceryStack(Stack):
     def _create_secrets(self) -> None:
         """Create Secrets Manager secrets for sensitive configuration."""
         # PayStack API key secret
-        secretsmanager.Secret(
+        self.paystack_secret = secretsmanager.Secret(
             self,
             "PayStackApiKey",
             secret_name=f"ai-grocery/{self.env_name}/paystack-api-key",
@@ -235,13 +323,158 @@ class AiGroceryStack(Stack):
         )
         
         # Bedrock configuration secret (for future use)
-        secretsmanager.Secret(
+        self.bedrock_secret = secretsmanager.Secret(
             self,
             "BedrockConfig",
             secret_name=f"ai-grocery/{self.env_name}/bedrock-config",
             description=f"Bedrock configuration for {self.env_name} environment",
             encryption_key=self.kms_key
         )
+    
+    def _create_lambda_layer(self) -> lambda_.LayerVersion:
+        """Create Lambda layer for shared dependencies."""
+        return lambda_.LayerVersion(
+            self,
+            "SharedDependenciesLayer",
+            layer_version_name=f"ai-grocery-shared-deps-{self.env_name}",
+            description="Shared dependencies for AI Grocery App Lambda functions",
+            code=lambda_.Code.from_asset("lambda_layers/shared"),
+            compatible_runtimes=[
+                lambda_.Runtime.PYTHON_3_11,
+                lambda_.Runtime.PYTHON_3_12
+            ],
+            compatible_architectures=[lambda_.Architecture.X86_64],
+            removal_policy=RemovalPolicy.DESTROY if self.env_name == "dev" else RemovalPolicy.RETAIN
+        )
+    
+    def _create_lambda_functions(self) -> None:
+        """Create Lambda functions for processing pipeline."""
+        
+        # Common Lambda environment variables
+        common_env = {
+            "ENVIRONMENT": self.env_name,
+            "ORDERS_TABLE_NAME": self.orders_table.table_name,
+            "PRODUCTS_TABLE_NAME": self.products_table.table_name,
+            "PAYMENT_LINKS_TABLE_NAME": self.payment_links_table.table_name,
+            "KMS_KEY_ARN": self.kms_key.key_arn,
+            "PAYSTACK_SECRET_ARN": self.paystack_secret.secret_arn,
+            "BEDROCK_MODEL_ID": self.config.bedrock_model_id,
+            "LOG_LEVEL": "DEBUG" if self.env_name == "dev" else "INFO",
+            "POWERTOOLS_SERVICE_NAME": "ai-grocery-app",
+            "POWERTOOLS_METRICS_NAMESPACE": f"AiGroceryApp/{self.env_name}",
+        }
+        
+        # Text Parser Lambda Function
+        self.text_parser_function = lambda_.Function(
+            self,
+            "TextParserFunction",
+            function_name=f"ai-grocery-text-parser-{self.env_name}",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            handler="handler.lambda_handler",
+            code=lambda_.Code.from_asset("src/lambdas/text_parser"),
+            timeout=Duration.seconds(self.config.lambda_timeout_seconds),
+            memory_size=self.config.lambda_memory_mb,
+            reserved_concurrent_executions=self.config.lambda_reserved_concurrency,
+            role=self.lambda_execution_role,
+            layers=[self.shared_layer],
+            environment={
+                **common_env,
+                "PRODUCT_MATCHER_QUEUE_URL": self.product_matcher_queue.queue_url,
+            },
+            tracing=lambda_.Tracing.ACTIVE if self.config.enable_xray_tracing else lambda_.Tracing.DISABLED,
+        )
+        
+        # Add SQS event source for Text Parser
+        self.text_parser_function.add_event_source(
+            lambda_event_sources.SqsEventSource(
+                self.text_parser_queue,
+                batch_size=1,
+                max_batching_window=Duration.seconds(0),
+                report_batch_item_failures=True,
+            )
+        )
+        
+        # Product Matcher Lambda Function
+        self.product_matcher_function = lambda_.Function(
+            self,
+            "ProductMatcherFunction",
+            function_name=f"ai-grocery-product-matcher-{self.env_name}",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            handler="handler.lambda_handler",
+            code=lambda_.Code.from_asset("src/lambdas/product_matcher"),
+            timeout=Duration.seconds(self.config.lambda_timeout_seconds * 2),  # Longer timeout for AI processing
+            memory_size=self.config.lambda_memory_mb * 2,  # More memory for AI processing
+            reserved_concurrent_executions=self.config.lambda_reserved_concurrency,
+            role=self.lambda_execution_role,
+            layers=[self.shared_layer],
+            environment={
+                **common_env,
+                "PAYMENT_PROCESSOR_QUEUE_URL": self.payment_processor_queue.queue_url,
+                "BEDROCK_MAX_TOKENS": str(self.config.bedrock_max_tokens),
+                "BEDROCK_TEMPERATURE": str(self.config.bedrock_temperature),
+            },
+            tracing=lambda_.Tracing.ACTIVE if self.config.enable_xray_tracing else lambda_.Tracing.DISABLED,
+        )
+        
+        # Add SQS event source for Product Matcher
+        self.product_matcher_function.add_event_source(
+            lambda_event_sources.SqsEventSource(
+                self.product_matcher_queue,
+                batch_size=1,
+                max_batching_window=Duration.seconds(0),
+                report_batch_item_failures=True,
+            )
+        )
+        
+        # Payment Processor Lambda Function
+        self.payment_processor_function = lambda_.Function(
+            self,
+            "PaymentProcessorFunction",
+            function_name=f"ai-grocery-payment-processor-{self.env_name}",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            handler="handler.lambda_handler",
+            code=lambda_.Code.from_asset("src/lambdas/payment_processor"),
+            timeout=Duration.seconds(self.config.lambda_timeout_seconds),
+            memory_size=self.config.lambda_memory_mb,
+            reserved_concurrent_executions=self.config.lambda_reserved_concurrency,
+            role=self.lambda_execution_role,
+            layers=[self.shared_layer],
+            environment={
+                **common_env,
+                "PAYSTACK_BASE_URL": self.config.paystack_base_url,
+            },
+            tracing=lambda_.Tracing.ACTIVE if self.config.enable_xray_tracing else lambda_.Tracing.DISABLED,
+        )
+        
+        # Add SQS event source for Payment Processor
+        self.payment_processor_function.add_event_source(
+            lambda_event_sources.SqsEventSource(
+                self.payment_processor_queue,
+                batch_size=1,
+                max_batching_window=Duration.seconds(0),
+                report_batch_item_failures=True,
+            )
+        )
+        
+        # Event Handler Lambda Function (for EventBridge events)
+        self.event_handler_function = lambda_.Function(
+            self,
+            "EventHandlerFunction",
+            function_name=f"ai-grocery-event-handler-{self.env_name}",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            handler="handler.lambda_handler",
+            code=lambda_.Code.from_asset("src/lambdas/event_handler"),
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            reserved_concurrent_executions=self.config.lambda_reserved_concurrency,
+            role=self.lambda_execution_role,
+            layers=[self.shared_layer],
+            environment=common_env,
+            tracing=lambda_.Tracing.ACTIVE if self.config.enable_xray_tracing else lambda_.Tracing.DISABLED,
+        )
+        
+        # Grant additional permissions to Lambda functions
+        self._grant_lambda_permissions()
     
     def _create_lambda_execution_role(self) -> iam.Role:
         """Create IAM role for Lambda function execution."""
@@ -276,18 +509,25 @@ class AiGroceryStack(Stack):
             ]
         ))
         
-        # Add permissions for SQS
+        # Add permissions for SQS (all queues)
         role.add_to_policy(iam.PolicyStatement(
             effect=iam.Effect.ALLOW,
             actions=[
                 "sqs:SendMessage",
                 "sqs:ReceiveMessage",
                 "sqs:DeleteMessage",
-                "sqs:GetQueueAttributes"
+                "sqs:GetQueueAttributes",
+                "sqs:ChangeMessageVisibility"
             ],
             resources=[
-                self.processing_queue.queue_arn,
-                self.dlq.queue_arn
+                self.text_parser_queue.queue_arn,
+                self.text_parser_dlq.queue_arn,
+                self.product_matcher_queue.queue_arn,
+                self.product_matcher_dlq.queue_arn,
+                self.payment_processor_queue.queue_arn,
+                self.payment_processor_dlq.queue_arn,
+                self.main_dlq.queue_arn,
+                self.eventbridge_dlq.queue_arn
             ]
         ))
         
@@ -332,6 +572,263 @@ class AiGroceryStack(Stack):
         ))
         
         return role
+    
+    def _grant_lambda_permissions(self) -> None:
+        """Grant additional permissions to Lambda functions after they are created."""
+        
+        # Grant SQS send permissions between queues
+        self.product_matcher_queue.grant_send_messages(self.text_parser_function)
+        self.payment_processor_queue.grant_send_messages(self.product_matcher_function)
+        
+        # Grant DynamoDB permissions to all Lambda functions
+        for func in [
+            self.text_parser_function,
+            self.product_matcher_function,
+            self.payment_processor_function,
+            self.event_handler_function
+        ]:
+            self.orders_table.grant_read_write_data(func)
+            self.products_table.grant_read_data(func)
+            self.payment_links_table.grant_read_write_data(func)
+            self.kms_key.grant_encrypt_decrypt(func)
+        
+        # Grant Secrets Manager access
+        self.paystack_secret.grant_read(self.payment_processor_function)
+        self.bedrock_secret.grant_read(self.product_matcher_function)
+    
+    def _create_eventbridge_infrastructure(self) -> None:
+        """Create EventBridge and EventBridge Pipes for event-driven architecture."""
+        
+        # Create EventBridge Event Bus for AI Grocery App
+        self.event_bus = events.EventBus(
+            self,
+            "AiGroceryEventBus",
+            event_bus_name=f"ai-grocery-events-{self.env_name}"
+        )
+        
+        # Create IAM role for EventBridge Pipes
+        pipes_role = iam.Role(
+            self,
+            "EventBridgePipesRole",
+            role_name=f"ai-grocery-pipes-role-{self.env_name}",
+            assumed_by=iam.ServicePrincipal("pipes.amazonaws.com"),
+        )
+        
+        # Grant DynamoDB Streams read permissions to Pipes role
+        pipes_role.add_to_policy(iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=[
+                "dynamodb:DescribeStream",
+                "dynamodb:GetRecords",
+                "dynamodb:GetShardIterator",
+                "dynamodb:ListStreams"
+            ],
+            resources=[
+                f"{self.orders_table.table_arn}/stream/*"
+            ]
+        ))
+        
+        # Grant EventBridge PutEvents permissions to Pipes role
+        pipes_role.add_to_policy(iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=["events:PutEvents"],
+            resources=[self.event_bus.event_bus_arn]
+        ))
+        
+        # Grant SQS permissions for DLQ
+        pipes_role.add_to_policy(iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=["sqs:SendMessage"],
+            resources=[self.eventbridge_dlq.queue_arn]
+        ))
+        
+        # Grant KMS permissions
+        self.kms_key.grant_decrypt(pipes_role)
+        
+        # Create EventBridge Pipe from DynamoDB Streams to EventBridge
+        # Note: The pipe connects DynamoDB Streams to EventBridge for real-time event routing
+        self.orders_pipe = pipes.CfnPipe(
+            self,
+            "OrdersStreamPipe",
+            name=f"ai-grocery-orders-pipe-{self.env_name}",
+            role_arn=pipes_role.role_arn,
+            source=self.orders_table.table_stream_arn,
+            source_parameters=pipes.CfnPipe.PipeSourceParametersProperty(
+                dynamo_db_stream_parameters=pipes.CfnPipe.PipeSourceDynamoDBStreamParametersProperty(
+                    starting_position="LATEST",
+                    batch_size=1,
+                    maximum_batching_window_in_seconds=0,
+                    dead_letter_config=pipes.CfnPipe.DeadLetterConfigProperty(
+                        arn=self.eventbridge_dlq.queue_arn
+                    ),
+                    maximum_record_age_in_seconds=60,
+                    maximum_retry_attempts=3,
+                    parallelization_factor=1
+                )
+            ),
+            target=self.event_bus.event_bus_arn,
+            target_parameters=pipes.CfnPipe.PipeTargetParametersProperty(
+                event_bridge_event_bus_parameters=pipes.CfnPipe.PipeTargetEventBridgeEventBusParametersProperty(
+                    detail_type="OrderUpdate",
+                    source="ai-grocery.orders"
+                ),
+                input_template='{"orderId": <$.dynamodb.Keys.order_id.S>, "eventType": <$.eventName>, "newImage": <$.dynamodb.NewImage>, "oldImage": <$.dynamodb.OldImage>}'
+            ),
+            description=f"Pipe from Orders DynamoDB Stream to EventBridge for {self.env_name}"
+        )
+        
+        # Create EventBridge Rules for different event types
+        
+        # Rule for order status changes - triggers notification handler
+        self.order_status_rule = events.Rule(
+            self,
+            "OrderStatusChangeRule",
+            rule_name=f"ai-grocery-order-status-{self.env_name}",
+            event_bus=self.event_bus,
+            description="Route order status change events to handler",
+            event_pattern=events.EventPattern(
+                source=["ai-grocery.orders"],
+                detail_type=["OrderUpdate"]
+            ),
+            targets=[
+                events_targets.LambdaFunction(
+                    self.event_handler_function,
+                    dead_letter_queue=self.eventbridge_dlq,
+                    max_event_age=Duration.hours(1),
+                    retry_attempts=3
+                )
+            ]
+        )
+        
+        # Rule for processing errors - routes to error handling
+        self.processing_error_rule = events.Rule(
+            self,
+            "ProcessingErrorRule",
+            rule_name=f"ai-grocery-processing-error-{self.env_name}",
+            event_bus=self.event_bus,
+            description="Route processing error events for alerting",
+            event_pattern=events.EventPattern(
+                source=["ai-grocery.processing"],
+                detail_type=["ProcessingError"]
+            ),
+            targets=[
+                events_targets.LambdaFunction(
+                    self.event_handler_function,
+                    dead_letter_queue=self.eventbridge_dlq,
+                    max_event_age=Duration.hours(1),
+                    retry_attempts=3
+                )
+            ]
+        )
+        
+        # Rule for payment events
+        self.payment_event_rule = events.Rule(
+            self,
+            "PaymentEventRule",
+            rule_name=f"ai-grocery-payment-event-{self.env_name}",
+            event_bus=self.event_bus,
+            description="Route payment-related events",
+            event_pattern=events.EventPattern(
+                source=["ai-grocery.payments"],
+                detail_type=["PaymentLinkCreated", "PaymentReceived", "PaymentFailed"]
+            ),
+            targets=[
+                events_targets.LambdaFunction(
+                    self.event_handler_function,
+                    dead_letter_queue=self.eventbridge_dlq,
+                    max_event_age=Duration.hours(1),
+                    retry_attempts=3
+                )
+            ]
+        )
+    
+    def _create_outputs(self) -> None:
+        """Create CloudFormation outputs for key resources."""
+        
+        # SQS Queue URLs
+        CfnOutput(
+            self,
+            "TextParserQueueUrl",
+            value=self.text_parser_queue.queue_url,
+            description="URL of the Text Parser SQS Queue",
+            export_name=f"ai-grocery-{self.env_name}-text-parser-queue-url"
+        )
+        
+        CfnOutput(
+            self,
+            "ProductMatcherQueueUrl",
+            value=self.product_matcher_queue.queue_url,
+            description="URL of the Product Matcher SQS Queue",
+            export_name=f"ai-grocery-{self.env_name}-product-matcher-queue-url"
+        )
+        
+        CfnOutput(
+            self,
+            "PaymentProcessorQueueUrl",
+            value=self.payment_processor_queue.queue_url,
+            description="URL of the Payment Processor SQS Queue",
+            export_name=f"ai-grocery-{self.env_name}-payment-processor-queue-url"
+        )
+        
+        # Lambda Function ARNs
+        CfnOutput(
+            self,
+            "TextParserFunctionArn",
+            value=self.text_parser_function.function_arn,
+            description="ARN of the Text Parser Lambda Function",
+            export_name=f"ai-grocery-{self.env_name}-text-parser-function-arn"
+        )
+        
+        CfnOutput(
+            self,
+            "ProductMatcherFunctionArn",
+            value=self.product_matcher_function.function_arn,
+            description="ARN of the Product Matcher Lambda Function",
+            export_name=f"ai-grocery-{self.env_name}-product-matcher-function-arn"
+        )
+        
+        CfnOutput(
+            self,
+            "PaymentProcessorFunctionArn",
+            value=self.payment_processor_function.function_arn,
+            description="ARN of the Payment Processor Lambda Function",
+            export_name=f"ai-grocery-{self.env_name}-payment-processor-function-arn"
+        )
+        
+        # EventBridge Event Bus ARN
+        CfnOutput(
+            self,
+            "EventBusArn",
+            value=self.event_bus.event_bus_arn,
+            description="ARN of the AI Grocery EventBridge Event Bus",
+            export_name=f"ai-grocery-{self.env_name}-event-bus-arn"
+        )
+        
+        # DynamoDB Table Names
+        CfnOutput(
+            self,
+            "OrdersTableName",
+            value=self.orders_table.table_name,
+            description="Name of the Orders DynamoDB Table",
+            export_name=f"ai-grocery-{self.env_name}-orders-table-name"
+        )
+        
+        CfnOutput(
+            self,
+            "ProductsTableName",
+            value=self.products_table.table_name,
+            description="Name of the Products DynamoDB Table",
+            export_name=f"ai-grocery-{self.env_name}-products-table-name"
+        )
+        
+        # KMS Key ARN
+        CfnOutput(
+            self,
+            "KmsKeyArn",
+            value=self.kms_key.key_arn,
+            description="ARN of the KMS Key for encryption",
+            export_name=f"ai-grocery-{self.env_name}-kms-key-arn"
+        )
     
     def _get_log_retention(self, days: int) -> logs.RetentionDays:
         """Map days to RetentionDays enum."""
