@@ -1,0 +1,1 @@
+"""Text Parser Lambda function."""
