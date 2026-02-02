@@ -1,10 +1,14 @@
 ## CancelOrder Mutation - Request Mapping Template
-## Cancels an order if not yet paid
+## First step: Query to get the order and validate ownership
 
 #set($orderId = $ctx.args.orderId)
 #set($userEmail = $ctx.identity.claims.email)
 
-## First, query to get the order and validate ownership
+## Store for later use in update step
+$util.qr($ctx.stash.put("orderId", $orderId))
+$util.qr($ctx.stash.put("userEmail", $userEmail))
+
+## Query to get the order
 {
     "version": "2018-05-29",
     "operation": "Query",

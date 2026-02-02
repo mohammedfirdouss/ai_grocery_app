@@ -1,5 +1,5 @@
 ## CancelOrder Mutation - Response Mapping Template
-## Validates ownership and payment status, then returns cancelled order
+## Validates ownership and payment status, stores order for update
 
 #if($ctx.error)
     $util.error($ctx.error.message, $ctx.error.type)
@@ -12,7 +12,7 @@
 #end
 
 #set($item = $items[0])
-#set($userEmail = $ctx.identity.claims.email)
+#set($userEmail = $ctx.stash.userEmail)
 
 ## Verify ownership
 #set($userGroups = $ctx.identity.claims.get("cognito:groups"))
@@ -41,25 +41,8 @@
     $util.error("Cannot cancel order in $status state", "InvalidStateError")
 #end
 
-## Store order data for update
-$util.qr($ctx.stash.put("orderId", $item.order_id))
+## Store order data for update step
 $util.qr($ctx.stash.put("createdAt", $item.created_at))
+$util.qr($ctx.stash.put("orderItem", $item))
 
-{
-    "id": $util.toJson($item.order_id),
-    "customerEmail": $util.toJson($item.customer_email),
-    "customerName": $util.toJson($item.customer_name),
-    "rawText": $util.toJson($item.raw_text),
-    "status": "FAILED",
-    "createdAt": $util.toJson($item.created_at),
-    "updatedAt": $util.toJson($util.time.nowISO8601()),
-    "correlationId": $util.toJson($item.correlation_id),
-    "extractedItems": $util.toJson($item.extracted_items),
-    "matchedItems": $util.toJson($item.matched_items),
-    "totalAmount": $util.toJson($item.total_amount),
-    "paymentLink": $util.toJson($item.payment_link),
-    "paymentStatus": "CANCELLED",
-    "processingDuration": $util.toJson($item.processing_duration),
-    "aiConfidenceScore": $util.toJson($item.ai_confidence_score),
-    "errorDetails": "Order cancelled by user"
-}
+$util.toJson($item)

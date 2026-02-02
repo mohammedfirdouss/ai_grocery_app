@@ -1180,17 +1180,47 @@ class AiGroceryStack(Stack):
             response_mapping_template=appsync.MappingTemplate.from_string("$util.toJson($ctx.prev.result)")
         )
         
-        # cancelOrder resolver
-        orders_data_source.create_resolver(
-            "CancelOrderResolver",
-            type_name="Mutation",
-            field_name="cancelOrder",
+        # Create functions for cancelOrder pipeline resolver
+        # First function: Query order and validate
+        cancel_order_query_function = appsync.AppsyncFunction(
+            self,
+            "CancelOrderQueryFunction",
+            name="cancelOrderQuery",
+            api=self.graphql_api,
+            data_source=orders_data_source,
             request_mapping_template=appsync.MappingTemplate.from_string(
                 read_template("Mutation.cancelOrder.request.vtl")
             ),
             response_mapping_template=appsync.MappingTemplate.from_string(
                 read_template("Mutation.cancelOrder.response.vtl")
             )
+        )
+        
+        # Second function: Update order status
+        cancel_order_update_function = appsync.AppsyncFunction(
+            self,
+            "CancelOrderUpdateFunction",
+            name="cancelOrderUpdate",
+            api=self.graphql_api,
+            data_source=orders_data_source,
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.cancelOrder.update.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.cancelOrder.update.response.vtl")
+            )
+        )
+        
+        # Create Pipeline resolver for cancelOrder
+        appsync.Resolver(
+            self,
+            "CancelOrderResolver",
+            api=self.graphql_api,
+            type_name="Mutation",
+            field_name="cancelOrder",
+            pipeline_config=[cancel_order_query_function, cancel_order_update_function],
+            request_mapping_template=appsync.MappingTemplate.from_string("{}"),
+            response_mapping_template=appsync.MappingTemplate.from_string("$util.toJson($ctx.prev.result)")
         )
         
         # Create Subscription resolvers (these use NONE data source)

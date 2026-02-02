@@ -6,7 +6,6 @@
 
 ## Filter: Only deliver if the order matches the subscription filter
 #if($ctx.result.id != $targetOrderId)
-    #set($shouldDeliver = false)
     $util.toJson(null)
 #else
     ## Verify the subscriber has access to this order

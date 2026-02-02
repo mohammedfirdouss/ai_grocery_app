@@ -181,6 +181,8 @@ class TestAppSyncResolvers:
             "Mutation.submitGroceryList.sqs.response.vtl",
             "Mutation.cancelOrder.request.vtl",
             "Mutation.cancelOrder.response.vtl",
+            "Mutation.cancelOrder.update.request.vtl",
+            "Mutation.cancelOrder.update.response.vtl",
         ]
         
         for resolver in resolvers:
