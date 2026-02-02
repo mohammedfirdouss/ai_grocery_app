@@ -1,0 +1,33 @@
+## GetMyOrders Query - Request Mapping Template
+## Lists orders for the authenticated user only
+
+#set($userEmail = $ctx.identity.claims.email)
+
+#if(!$userEmail)
+    $util.unauthorized()
+#end
+
+#set($limit = 20)
+#if($ctx.args.pagination && $ctx.args.pagination.limit)
+    #set($limit = $ctx.args.pagination.limit)
+    #if($limit > 100)
+        #set($limit = 100)
+    #end
+#end
+
+{
+    "version": "2018-05-29",
+    "operation": "Query",
+    "index": "customer-email-index",
+    "query": {
+        "expression": "customer_email = :email",
+        "expressionValues": {
+            ":email": $util.dynamodb.toDynamoDBJson($userEmail)
+        }
+    },
+    "limit": $limit,
+    #if($ctx.args.pagination && $ctx.args.pagination.nextToken)
+    "nextToken": $util.toJson($ctx.args.pagination.nextToken),
+    #end
+    "scanIndexForward": false
+}

@@ -1,0 +1,48 @@
+## CancelOrder Mutation - Response Mapping Template
+## Validates ownership and payment status, stores order for update
+
+#if($ctx.error)
+    $util.error($ctx.error.message, $ctx.error.type)
+#end
+
+#set($items = $ctx.result.items)
+
+#if($items.isEmpty())
+    $util.error("Order not found", "NotFoundError")
+#end
+
+#set($item = $items[0])
+#set($userEmail = $ctx.stash.userEmail)
+
+## Verify ownership
+#set($userGroups = $ctx.identity.claims.get("cognito:groups"))
+#set($isAdmin = false)
+#if($userGroups)
+    #foreach($group in $userGroups)
+        #if($group == "Admins")
+            #set($isAdmin = true)
+        #end
+    #end
+#end
+
+#if(!$isAdmin && $item.customer_email != $userEmail)
+    $util.unauthorized()
+#end
+
+## Check if order can be cancelled
+#set($status = $item.status)
+#set($paymentStatus = $item.payment_status)
+
+#if($paymentStatus == "PAID")
+    $util.error("Cannot cancel order that has been paid", "InvalidStateError")
+#end
+
+#if($status == "COMPLETED" || $status == "FAILED")
+    $util.error("Cannot cancel order in $status state", "InvalidStateError")
+#end
+
+## Store order data for update step
+$util.qr($ctx.stash.put("createdAt", $item.created_at))
+$util.qr($ctx.stash.put("orderItem", $item))
+
+$util.toJson($item)

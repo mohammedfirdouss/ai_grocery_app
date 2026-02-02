@@ -1,0 +1,27 @@
+## OnOrderStatusChanged Subscription - Response Mapping Template
+## Filters subscription results to only the requested order
+
+#set($subscriberEmail = $ctx.identity.claims.email)
+#set($targetOrderId = $ctx.args.orderId)
+
+## Filter: Only deliver if the order matches the subscription filter
+#if($ctx.result.id != $targetOrderId)
+    $util.toJson(null)
+#else
+    ## Verify the subscriber has access to this order
+    #set($userGroups = $ctx.identity.claims.get("cognito:groups"))
+    #set($isAdmin = false)
+    #if($userGroups)
+        #foreach($group in $userGroups)
+            #if($group == "Admins")
+                #set($isAdmin = true)
+            #end
+        #end
+    #end
+    
+    #if(!$isAdmin && $ctx.result.customerEmail != $subscriberEmail)
+        $util.toJson(null)
+    #else
+        $util.toJson($ctx.result)
+    #end
+#end

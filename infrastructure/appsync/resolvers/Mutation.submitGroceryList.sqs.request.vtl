@@ -1,0 +1,41 @@
+## SubmitGroceryList SQS Function - Request Mapping Template
+## Sends message to SQS Text Parser queue for async processing
+
+#set($orderId = $ctx.stash.orderId)
+#set($correlationId = $ctx.stash.correlationId)
+#set($timestamp = $ctx.stash.timestamp)
+#set($input = $ctx.stash.input)
+
+## Build the message body JSON
+#set($messageBody = {
+    "order_id": $orderId,
+    "raw_text": $input.rawText,
+    "customer_email": $input.customerEmail,
+    "customer_name": $input.customerName,
+    "correlation_id": $correlationId,
+    "created_at": $timestamp
+})
+
+## Build URL-encoded body for SQS SendMessage action
+#set($encodedQueueUrl = $util.urlEncode($ctx.stash.queueUrl))
+#set($encodedMessageBody = $util.urlEncode($util.toJson($messageBody)))
+
+#set($sqsBody = "Action=SendMessage")
+#set($sqsBody = "${sqsBody}&Version=2012-11-05")
+#set($sqsBody = "${sqsBody}&QueueUrl=${encodedQueueUrl}")
+#set($sqsBody = "${sqsBody}&MessageBody=${encodedMessageBody}")
+#set($sqsBody = "${sqsBody}&MessageAttribute.1.Name=CorrelationId")
+#set($sqsBody = "${sqsBody}&MessageAttribute.1.Value.StringValue=${correlationId}")
+#set($sqsBody = "${sqsBody}&MessageAttribute.1.Value.DataType=String")
+
+{
+    "version": "2018-05-29",
+    "method": "POST",
+    "resourcePath": "/",
+    "params": {
+        "headers": {
+            "Content-Type": "application/x-www-form-urlencoded"
+        },
+        "body": "$sqsBody"
+    }
+}

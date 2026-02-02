@@ -1,0 +1,35 @@
+## ListOrders Query - Response Mapping Template
+## Transforms DynamoDB response to GraphQL OrderConnection type
+
+#set($items = [])
+#foreach($item in $ctx.result.items)
+    #set($order = {
+        "id": $item.order_id,
+        "customerEmail": $item.customer_email,
+        "customerName": $item.customer_name,
+        "rawText": $item.raw_text,
+        "status": $item.status,
+        "createdAt": $item.created_at,
+        "updatedAt": $item.updated_at,
+        "correlationId": $item.correlation_id,
+        "extractedItems": $item.extracted_items,
+        "matchedItems": $item.matched_items,
+        "totalAmount": $item.total_amount,
+        "paymentLink": $item.payment_link,
+        "paymentStatus": $item.payment_status,
+        "processingDuration": $item.processing_duration,
+        "aiConfidenceScore": $item.ai_confidence_score,
+        "errorDetails": $item.error_details
+    })
+    $util.qr($items.add($order))
+#end
+
+{
+    "items": $util.toJson($items),
+    #if($ctx.result.nextToken)
+    "nextToken": $util.toJson($ctx.result.nextToken),
+    #else
+    "nextToken": null,
+    #end
+    "totalCount": null
+}

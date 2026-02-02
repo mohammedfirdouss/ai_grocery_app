@@ -1,0 +1,27 @@
+## CancelOrder Update Function - Request Mapping Template
+## Updates the order status to FAILED in DynamoDB
+
+#set($orderId = $ctx.stash.orderId)
+#set($createdAt = $ctx.stash.createdAt)
+#set($timestamp = $util.time.nowISO8601())
+
+{
+    "version": "2018-05-29",
+    "operation": "UpdateItem",
+    "key": {
+        "order_id": $util.dynamodb.toDynamoDBJson($orderId),
+        "created_at": $util.dynamodb.toDynamoDBJson($createdAt)
+    },
+    "update": {
+        "expression": "SET #status = :status, updated_at = :updatedAt, payment_status = :paymentStatus, error_details = :errorDetails",
+        "expressionNames": {
+            "#status": "status"
+        },
+        "expressionValues": {
+            ":status": $util.dynamodb.toDynamoDBJson("FAILED"),
+            ":updatedAt": $util.dynamodb.toDynamoDBJson($timestamp),
+            ":paymentStatus": $util.dynamodb.toDynamoDBJson("CANCELLED"),
+            ":errorDetails": $util.dynamodb.toDynamoDBJson("Order cancelled by user")
+        }
+    }
+}

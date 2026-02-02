@@ -1,0 +1,28 @@
+## GetOrder Query - Request Mapping Template
+## Retrieves a single order from DynamoDB by order_id
+
+#set($orderId = $ctx.args.orderId)
+
+## Validate authorization - user must own the order or have admin access
+#set($userEmail = $ctx.identity.claims.email)
+#set($userGroups = $ctx.identity.claims.get("cognito:groups"))
+#set($isAdmin = false)
+#if($userGroups)
+    #foreach($group in $userGroups)
+        #if($group == "Admins")
+            #set($isAdmin = true)
+        #end
+    #end
+#end
+
+{
+    "version": "2018-05-29",
+    "operation": "Query",
+    "query": {
+        "expression": "order_id = :orderId",
+        "expressionValues": {
+            ":orderId": $util.dynamodb.toDynamoDBJson($orderId)
+        }
+    },
+    "limit": 1
+}

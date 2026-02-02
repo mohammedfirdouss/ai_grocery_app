@@ -1,0 +1,62 @@
+## SubmitGroceryList Mutation - Request Mapping Template
+## Creates a new order and sends message to SQS for processing
+
+#set($input = $ctx.args.input)
+#set($userEmail = $ctx.identity.claims.email)
+
+## Generate unique IDs
+#set($orderId = $util.autoId())
+#set($correlationId = $util.autoId())
+#set($timestamp = $util.time.nowISO8601())
+
+## Validate that the authenticated user's email matches the input (or allow if not specified)
+#if($input.customerEmail != $userEmail)
+    #set($userGroups = $ctx.identity.claims.get("cognito:groups"))
+    #set($isAdmin = false)
+    #if($userGroups)
+        #foreach($group in $userGroups)
+            #if($group == "Admins")
+                #set($isAdmin = true)
+            #end
+        #end
+    #end
+    
+    #if(!$isAdmin)
+        $util.error("Customer email must match authenticated user email", "ValidationError")
+    #end
+#end
+
+## Validate input
+#if(!$input.rawText || $input.rawText.trim().length() == 0)
+    $util.error("Raw text cannot be empty", "ValidationError")
+#end
+
+#if($input.rawText.length() > 5000)
+    $util.error("Raw text exceeds maximum length of 5000 characters", "ValidationError")
+#end
+
+## Store the order data in stash for the pipeline
+$util.qr($ctx.stash.put("orderId", $orderId))
+$util.qr($ctx.stash.put("correlationId", $correlationId))
+$util.qr($ctx.stash.put("timestamp", $timestamp))
+$util.qr($ctx.stash.put("input", $input))
+
+## First, put the order into DynamoDB
+{
+    "version": "2018-05-29",
+    "operation": "PutItem",
+    "key": {
+        "order_id": $util.dynamodb.toDynamoDBJson($orderId),
+        "created_at": $util.dynamodb.toDynamoDBJson($timestamp)
+    },
+    "attributeValues": {
+        "customer_email": $util.dynamodb.toDynamoDBJson($input.customerEmail),
+        #if($input.customerName)
+        "customer_name": $util.dynamodb.toDynamoDBJson($input.customerName),
+        #end
+        "raw_text": $util.dynamodb.toDynamoDBJson($input.rawText),
+        "status": $util.dynamodb.toDynamoDBJson("SUBMITTED"),
+        "updated_at": $util.dynamodb.toDynamoDBJson($timestamp),
+        "correlation_id": $util.dynamodb.toDynamoDBJson($correlationId)
+    }
+}

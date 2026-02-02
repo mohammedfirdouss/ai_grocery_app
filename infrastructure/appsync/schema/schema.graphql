@@ -1,0 +1,305 @@
+"""
+AI Grocery App GraphQL Schema
+
+Defines the GraphQL API for the AI Grocery App, including:
+- Mutations for grocery list submission
+- Queries for order and payment link retrieval
+- Subscriptions for real-time updates
+"""
+
+# ==============================================================================
+# ENUMS
+# ==============================================================================
+
+"""Order processing status"""
+enum ProcessingStatus {
+  SUBMITTED
+  PARSING
+  EXTRACTING
+  MATCHING
+  PRICING
+  PAYMENT_LINK_CREATING
+  COMPLETED
+  FAILED
+}
+
+"""Payment status"""
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+
+# ==============================================================================
+# INPUT TYPES
+# ==============================================================================
+
+"""Input for submitting a grocery list"""
+input SubmitGroceryListInput {
+  """Customer email address"""
+  customerEmail: String!
+  """Customer name (optional)"""
+  customerName: String
+  """Raw grocery list text from the customer"""
+  rawText: String!
+}
+
+"""Filter options for listing orders"""
+input ListOrdersFilter {
+  """Filter by processing status"""
+  status: ProcessingStatus
+  """Filter by customer email"""
+  customerEmail: String
+  """Return orders created after this timestamp (ISO 8601)"""
+  createdAfter: AWSDateTime
+  """Return orders created before this timestamp (ISO 8601)"""
+  createdBefore: AWSDateTime
+}
+
+"""Pagination options"""
+input PaginationInput {
+  """Maximum number of items to return (default: 20, max: 100)"""
+  limit: Int
+  """Cursor for pagination (from previous response)"""
+  nextToken: String
+}
+
+# ==============================================================================
+# TYPES
+# ==============================================================================
+
+"""Extracted grocery item from natural language processing"""
+type ExtractedItem {
+  """Item name"""
+  name: String!
+  """Item quantity"""
+  quantity: Float!
+  """Unit of measurement"""
+  unit: String!
+  """Additional specifications (e.g., organic, ripe)"""
+  specifications: [String!]
+  """AI confidence score (0.0 to 1.0)"""
+  confidenceScore: Float!
+  """Original text segment"""
+  rawTextSegment: String!
+}
+
+"""Product-matched grocery item with pricing"""
+type MatchedItem {
+  """Extracted item details"""
+  extractedItem: ExtractedItem!
+  """Product catalog ID"""
+  productId: String!
+  """Matched product name"""
+  productName: String!
+  """Price per unit"""
+  unitPrice: Float!
+  """Total price for quantity"""
+  totalPrice: Float!
+  """Product availability"""
+  availability: Boolean!
+  """Matching confidence score"""
+  matchConfidence: Float!
+  """Alternative product IDs"""
+  alternativeProducts: [String!]
+}
+
+"""Grocery order with processing state"""
+type Order {
+  """Unique order ID"""
+  id: ID!
+  """Customer email address"""
+  customerEmail: String!
+  """Customer name"""
+  customerName: String
+  """Original grocery list text"""
+  rawText: String!
+  """Current processing status"""
+  status: ProcessingStatus!
+  """Order creation timestamp"""
+  createdAt: AWSDateTime!
+  """Last update timestamp"""
+  updatedAt: AWSDateTime!
+  """Correlation ID for tracing"""
+  correlationId: String!
+  """Items extracted from the grocery list"""
+  extractedItems: [ExtractedItem!]
+  """Product-matched items with pricing"""
+  matchedItems: [MatchedItem!]
+  """Total order amount"""
+  totalAmount: Float
+  """PayStack payment link URL"""
+  paymentLink: String
+  """Payment status"""
+  paymentStatus: PaymentStatus
+  """Processing time in milliseconds"""
+  processingDuration: Int
+  """Overall AI confidence score"""
+  aiConfidenceScore: Float
+  """Error details if processing failed"""
+  errorDetails: String
+}
+
+"""PayStack payment link information"""
+type PaymentLink {
+  """Associated order ID"""
+  orderId: ID!
+  """PayStack payment link ID"""
+  paystackLinkId: String!
+  """PayStack payment URL"""
+  paymentUrl: String!
+  """Payment amount"""
+  amount: Float!
+  """Currency code (default: NGN)"""
+  currency: String!
+  """Payment status"""
+  status: PaymentStatus!
+  """Payment link creation timestamp"""
+  createdAt: AWSDateTime!
+  """Payment link expiration timestamp"""
+  expiresAt: AWSDateTime!
+}
+
+"""Processing event for real-time updates"""
+type ProcessingEvent {
+  """Order ID"""
+  orderId: ID!
+  """Event type"""
+  eventType: String!
+  """Current processing status"""
+  status: ProcessingStatus!
+  """Human-readable message"""
+  message: String!
+  """Event timestamp"""
+  timestamp: AWSDateTime!
+  """Correlation ID for tracing"""
+  correlationId: String!
+  """Additional event data (JSON string)"""
+  data: AWSJSON
+}
+
+"""Response for submitting a grocery list"""
+type SubmitGroceryListResponse {
+  """Created order ID"""
+  orderId: ID!
+  """Order status (should be SUBMITTED)"""
+  status: ProcessingStatus!
+  """Correlation ID for tracing the request"""
+  correlationId: String!
+  """Order creation timestamp"""
+  createdAt: AWSDateTime!
+  """Human-readable message"""
+  message: String!
+}
+
+"""Paginated list of orders"""
+type OrderConnection {
+  """List of orders"""
+  items: [Order!]!
+  """Cursor for next page (null if no more pages)"""
+  nextToken: String
+  """Total count of matching orders (if available)"""
+  totalCount: Int
+}
+
+# ==============================================================================
+# QUERIES
+# ==============================================================================
+
+type Query {
+  """
+  Get a specific order by ID
+  Requires authentication
+  """
+  getOrder(orderId: ID!): Order
+    @aws_cognito_user_pools
+
+  """
+  List orders with optional filtering and pagination
+  Requires authentication
+  """
+  listOrders(
+    filter: ListOrdersFilter
+    pagination: PaginationInput
+  ): OrderConnection!
+    @aws_cognito_user_pools
+
+  """
+  Get orders for the authenticated user
+  Requires authentication - returns only the caller's orders
+  """
+  getMyOrders(pagination: PaginationInput): OrderConnection!
+    @aws_cognito_user_pools
+
+  """
+  Get payment link for an order
+  Requires authentication
+  """
+  getPaymentLink(orderId: ID!): PaymentLink
+    @aws_cognito_user_pools
+}
+
+# ==============================================================================
+# MUTATIONS
+# ==============================================================================
+
+type Mutation {
+  """
+  Submit a grocery list for processing
+  Requires authentication
+  Creates a new order and queues it for processing
+  """
+  submitGroceryList(input: SubmitGroceryListInput!): SubmitGroceryListResponse!
+    @aws_cognito_user_pools
+
+  """
+  Cancel an order (if not yet paid)
+  Requires authentication
+  """
+  cancelOrder(orderId: ID!): Order
+    @aws_cognito_user_pools
+}
+
+# ==============================================================================
+# SUBSCRIPTIONS
+# ==============================================================================
+
+type Subscription {
+  """
+  Subscribe to order status changes for a specific order
+  Requires authentication
+  Filter by orderId to receive updates for a specific order
+  """
+  onOrderStatusChanged(orderId: ID!): Order
+    @aws_subscribe(mutations: ["submitGroceryList", "cancelOrder"])
+    @aws_cognito_user_pools
+
+  """
+  Subscribe to processing events for real-time updates
+  Requires authentication
+  Provides detailed processing updates as the order progresses
+  """
+  onProcessingEvent(orderId: ID!): ProcessingEvent
+    @aws_subscribe(mutations: ["submitGroceryList"])
+    @aws_cognito_user_pools
+
+  """
+  Subscribe to payment status updates for an order
+  Requires authentication
+  """
+  onPaymentStatusChanged(orderId: ID!): PaymentLink
+    @aws_subscribe(mutations: ["submitGroceryList"])
+    @aws_cognito_user_pools
+}
+
+# ==============================================================================
+# SCHEMA DEFINITION
+# ==============================================================================
+
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}

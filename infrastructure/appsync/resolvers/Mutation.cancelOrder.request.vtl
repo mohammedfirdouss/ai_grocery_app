@@ -1,0 +1,22 @@
+## CancelOrder Mutation - Request Mapping Template
+## First step: Query to get the order and validate ownership
+
+#set($orderId = $ctx.args.orderId)
+#set($userEmail = $ctx.identity.claims.email)
+
+## Store for later use in update step
+$util.qr($ctx.stash.put("orderId", $orderId))
+$util.qr($ctx.stash.put("userEmail", $userEmail))
+
+## Query to get the order
+{
+    "version": "2018-05-29",
+    "operation": "Query",
+    "query": {
+        "expression": "order_id = :orderId",
+        "expressionValues": {
+            ":orderId": $util.dynamodb.toDynamoDBJson($orderId)
+        }
+    },
+    "limit": 1
+}
