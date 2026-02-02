@@ -1,0 +1,18 @@
+## CancelOrder Mutation - Request Mapping Template
+## Cancels an order if not yet paid
+
+#set($orderId = $ctx.args.orderId)
+#set($userEmail = $ctx.identity.claims.email)
+
+## First, query to get the order and validate ownership
+{
+    "version": "2018-05-29",
+    "operation": "Query",
+    "query": {
+        "expression": "order_id = :orderId",
+        "expressionValues": {
+            ":orderId": $util.dynamodb.toDynamoDBJson($orderId)
+        }
+    },
+    "limit": 1
+}

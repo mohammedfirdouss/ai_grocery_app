@@ -1,0 +1,12 @@
+## OnPaymentStatusChanged Subscription - Response Mapping Template
+## Filters subscription results for payment status changes
+
+#set($subscriberEmail = $ctx.identity.claims.email)
+#set($targetOrderId = $ctx.args.orderId)
+
+## Filter: Only deliver if the order matches the subscription filter
+#if($ctx.result.orderId != $targetOrderId)
+    $util.toJson(null)
+#else
+    $util.toJson($ctx.result)
+#end

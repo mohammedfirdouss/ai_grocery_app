@@ -1,0 +1,18 @@
+## SubmitGroceryList Mutation - Response Mapping Template
+## Returns the created order response after DynamoDB put
+
+#if($ctx.error)
+    $util.error($ctx.error.message, $ctx.error.type)
+#end
+
+#set($orderId = $ctx.stash.orderId)
+#set($correlationId = $ctx.stash.correlationId)
+#set($timestamp = $ctx.stash.timestamp)
+
+{
+    "orderId": $util.toJson($orderId),
+    "status": "SUBMITTED",
+    "correlationId": $util.toJson($correlationId),
+    "createdAt": $util.toJson($timestamp),
+    "message": "Grocery list submitted successfully. Processing will begin shortly."
+}

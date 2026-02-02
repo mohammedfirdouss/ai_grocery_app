@@ -1,0 +1,19 @@
+## SubmitGroceryList SQS Function - Request Mapping Template
+## Sends message to SQS Text Parser queue for async processing
+
+#set($orderId = $ctx.stash.orderId)
+#set($correlationId = $ctx.stash.correlationId)
+#set($timestamp = $ctx.stash.timestamp)
+#set($input = $ctx.stash.input)
+
+{
+    "version": "2018-05-29",
+    "method": "POST",
+    "resourcePath": "/",
+    "params": {
+        "headers": {
+            "Content-Type": "application/x-www-form-urlencoded"
+        },
+        "body": "Action=SendMessage&Version=2012-11-05&QueueUrl=$util.urlEncode($ctx.stash.queueUrl)&MessageBody=$util.urlEncode($util.toJson({\"order_id\": $orderId, \"raw_text\": $input.rawText, \"customer_email\": $input.customerEmail, \"customer_name\": $input.customerName, \"correlation_id\": $correlationId, \"created_at\": $timestamp}))&MessageAttribute.1.Name=CorrelationId&MessageAttribute.1.Value.StringValue=$correlationId&MessageAttribute.1.Value.DataType=String"
+    }
+}

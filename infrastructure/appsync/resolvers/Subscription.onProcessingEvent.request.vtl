@@ -1,0 +1,10 @@
+## OnProcessingEvent Subscription - Request Mapping Template
+## Sets up subscription filter for processing events
+
+{
+    "version": "2018-05-29",
+    "payload": {
+        "orderId": $util.toJson($ctx.args.orderId),
+        "subscriberEmail": $util.toJson($ctx.identity.claims.email)
+    }
+}

@@ -1,0 +1,65 @@
+## ListOrders Query - Request Mapping Template
+## Lists orders with optional filtering and pagination
+
+#set($limit = 20)
+#if($ctx.args.pagination && $ctx.args.pagination.limit)
+    #set($limit = $ctx.args.pagination.limit)
+    #if($limit > 100)
+        #set($limit = 100)
+    #end
+#end
+
+#set($expression = "")
+#set($expressionValues = {})
+#set($expressionNames = {})
+#set($filter = $ctx.args.filter)
+
+## Build query based on filters
+#if($filter && $filter.status)
+    #set($expression = "#status_attr = :statusVal")
+    $util.qr($expressionValues.put(":statusVal", $util.dynamodb.toDynamoDB($filter.status)))
+    $util.qr($expressionNames.put("#status_attr", "status"))
+    
+    {
+        "version": "2018-05-29",
+        "operation": "Query",
+        "index": "status-index",
+        "query": {
+            "expression": "$expression",
+            "expressionValues": $util.toJson($expressionValues),
+            "expressionNames": $util.toJson($expressionNames)
+        },
+        "limit": $limit,
+        #if($ctx.args.pagination && $ctx.args.pagination.nextToken)
+        "nextToken": $util.toJson($ctx.args.pagination.nextToken),
+        #end
+        "scanIndexForward": false
+    }
+#elseif($filter && $filter.customerEmail)
+    {
+        "version": "2018-05-29",
+        "operation": "Query",
+        "index": "customer-email-index",
+        "query": {
+            "expression": "customer_email = :email",
+            "expressionValues": {
+                ":email": $util.dynamodb.toDynamoDBJson($filter.customerEmail)
+            }
+        },
+        "limit": $limit,
+        #if($ctx.args.pagination && $ctx.args.pagination.nextToken)
+        "nextToken": $util.toJson($ctx.args.pagination.nextToken),
+        #end
+        "scanIndexForward": false
+    }
+#else
+    ## Default: Scan with pagination (admin only functionality)
+    {
+        "version": "2018-05-29",
+        "operation": "Scan",
+        "limit": $limit,
+        #if($ctx.args.pagination && $ctx.args.pagination.nextToken)
+        "nextToken": $util.toJson($ctx.args.pagination.nextToken),
+        #end
+    }
+#end

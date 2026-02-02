@@ -1,0 +1,45 @@
+## GetOrder Query - Response Mapping Template
+## Transforms DynamoDB response to GraphQL Order type
+
+#set($items = $ctx.result.items)
+
+#if($items.isEmpty())
+    $util.toJson(null)
+#else
+    #set($item = $items[0])
+    
+    ## Verify authorization - user must own the order or be admin
+    #set($userEmail = $ctx.identity.claims.email)
+    #set($userGroups = $ctx.identity.claims.get("cognito:groups"))
+    #set($isAdmin = false)
+    #if($userGroups)
+        #foreach($group in $userGroups)
+            #if($group == "Admins")
+                #set($isAdmin = true)
+            #end
+        #end
+    #end
+    
+    #if(!$isAdmin && $item.customer_email != $userEmail)
+        $util.unauthorized()
+    #end
+    
+    {
+        "id": $util.toJson($item.order_id),
+        "customerEmail": $util.toJson($item.customer_email),
+        "customerName": $util.toJson($item.customer_name),
+        "rawText": $util.toJson($item.raw_text),
+        "status": $util.toJson($item.status),
+        "createdAt": $util.toJson($item.created_at),
+        "updatedAt": $util.toJson($item.updated_at),
+        "correlationId": $util.toJson($item.correlation_id),
+        "extractedItems": $util.toJson($item.extracted_items),
+        "matchedItems": $util.toJson($item.matched_items),
+        "totalAmount": $util.toJson($item.total_amount),
+        "paymentLink": $util.toJson($item.payment_link),
+        "paymentStatus": $util.toJson($item.payment_status),
+        "processingDuration": $util.toJson($item.processing_duration),
+        "aiConfidenceScore": $util.toJson($item.ai_confidence_score),
+        "errorDetails": $util.toJson($item.error_details)
+    }
+#end

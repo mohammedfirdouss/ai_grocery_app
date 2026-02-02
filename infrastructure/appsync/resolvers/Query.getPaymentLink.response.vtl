@@ -1,0 +1,19 @@
+## GetPaymentLink Query - Response Mapping Template
+## Transforms DynamoDB response to GraphQL PaymentLink type
+
+#if(!$ctx.result)
+    $util.toJson(null)
+#else
+    #set($item = $ctx.result)
+    
+    {
+        "orderId": $util.toJson($item.order_id),
+        "paystackLinkId": $util.toJson($item.access_code),
+        "paymentUrl": $util.toJson($item.payment_link),
+        "amount": $util.toJson($item.amount),
+        "currency": #if($item.currency)$util.toJson($item.currency)#else"NGN"#end,
+        "status": $util.toJson($item.status),
+        "createdAt": $util.toJson($item.created_at),
+        "expiresAt": #if($item.expires_at)$util.toJson($util.time.epochMilliSecondsToISO8601($item.expires_at * 1000))#else$util.toJson(null)#end
+    }
+#end

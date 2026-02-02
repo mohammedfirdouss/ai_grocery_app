@@ -23,9 +23,11 @@ from aws_cdk import (
     aws_events as events,
     aws_events_targets as events_targets,
     aws_pipes as pipes,
+    aws_cognito as cognito,
 )
 from constructs import Construct
 from typing import Dict, Any, Optional
+import os
 
 from infrastructure.config.environment_config import EnvironmentConfig
 
@@ -76,6 +78,12 @@ class AiGroceryStack(Stack):
         
         # Set up EventBridge and EventBridge Pipes
         self._create_eventbridge_infrastructure()
+        
+        # Create Cognito User Pool for authentication
+        self._create_cognito_user_pool()
+        
+        # Create AppSync GraphQL API
+        self._create_appsync_api()
         
         # Create stack outputs
         self._create_outputs()
@@ -829,6 +837,40 @@ class AiGroceryStack(Stack):
             description="ARN of the KMS Key for encryption",
             export_name=f"ai-grocery-{self.env_name}-kms-key-arn"
         )
+        
+        # AppSync GraphQL API outputs
+        CfnOutput(
+            self,
+            "GraphQLApiUrl",
+            value=self.graphql_api.graphql_url,
+            description="URL of the AppSync GraphQL API",
+            export_name=f"ai-grocery-{self.env_name}-graphql-api-url"
+        )
+        
+        CfnOutput(
+            self,
+            "GraphQLApiId",
+            value=self.graphql_api.api_id,
+            description="ID of the AppSync GraphQL API",
+            export_name=f"ai-grocery-{self.env_name}-graphql-api-id"
+        )
+        
+        # Cognito User Pool outputs
+        CfnOutput(
+            self,
+            "UserPoolId",
+            value=self.user_pool.user_pool_id,
+            description="ID of the Cognito User Pool",
+            export_name=f"ai-grocery-{self.env_name}-user-pool-id"
+        )
+        
+        CfnOutput(
+            self,
+            "UserPoolClientId",
+            value=self.user_pool_client.user_pool_client_id,
+            description="ID of the Cognito User Pool Client",
+            export_name=f"ai-grocery-{self.env_name}-user-pool-client-id"
+        )
     
     def _get_log_retention(self, days: int) -> logs.RetentionDays:
         """Map days to RetentionDays enum."""
@@ -903,5 +945,304 @@ class AiGroceryStack(Stack):
             log_group_name=f"/aws/lambda/ai-grocery-payment-processor-{self.env_name}",
             retention=retention,
             encryption_key=self.kms_key,
+            removal_policy=RemovalPolicy.DESTROY
+        )
+    
+    def _create_cognito_user_pool(self) -> None:
+        """Create Cognito User Pool for authentication."""
+        
+        # Create User Pool
+        self.user_pool = cognito.UserPool(
+            self,
+            "AiGroceryUserPool",
+            user_pool_name=f"ai-grocery-user-pool-{self.env_name}",
+            self_sign_up_enabled=True,
+            sign_in_aliases=cognito.SignInAliases(
+                email=True,
+                username=False
+            ),
+            auto_verify=cognito.AutoVerifiedAttrs(
+                email=True
+            ),
+            standard_attributes=cognito.StandardAttributes(
+                email=cognito.StandardAttribute(
+                    required=True,
+                    mutable=True
+                ),
+                fullname=cognito.StandardAttribute(
+                    required=False,
+                    mutable=True
+                )
+            ),
+            password_policy=cognito.PasswordPolicy(
+                min_length=8,
+                require_lowercase=True,
+                require_uppercase=True,
+                require_digits=True,
+                require_symbols=False,
+                temp_password_validity=Duration.days(7)
+            ),
+            account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
+            removal_policy=RemovalPolicy.DESTROY if self.env_name == "dev" else RemovalPolicy.RETAIN
+        )
+        
+        # Create Admin group
+        cognito.CfnUserPoolGroup(
+            self,
+            "AdminGroup",
+            user_pool_id=self.user_pool.user_pool_id,
+            group_name="Admins",
+            description="Administrator group with elevated privileges"
+        )
+        
+        # Create User Pool Client for AppSync
+        self.user_pool_client = self.user_pool.add_client(
+            "AiGroceryAppClient",
+            user_pool_client_name=f"ai-grocery-app-client-{self.env_name}",
+            auth_flows=cognito.AuthFlow(
+                user_password=True,
+                user_srp=True
+            ),
+            generate_secret=False,
+            prevent_user_existence_errors=True,
+            access_token_validity=Duration.hours(1),
+            id_token_validity=Duration.hours(1),
+            refresh_token_validity=Duration.days(30)
+        )
+    
+    def _create_appsync_api(self) -> None:
+        """Create AppSync GraphQL API with DynamoDB and SQS data sources."""
+        
+        # Get the schema file path
+        schema_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "appsync", "schema", "schema.graphql"
+        )
+        
+        # Create AppSync API with Cognito User Pool authorization
+        self.graphql_api = appsync.GraphqlApi(
+            self,
+            "AiGroceryGraphQLApi",
+            name=f"ai-grocery-api-{self.env_name}",
+            definition=appsync.Definition.from_file(schema_path),
+            authorization_config=appsync.AuthorizationConfig(
+                default_authorization=appsync.AuthorizationMode(
+                    authorization_type=appsync.AuthorizationType.USER_POOL,
+                    user_pool_config=appsync.UserPoolConfig(
+                        user_pool=self.user_pool
+                    )
+                )
+            ),
+            log_config=appsync.LogConfig(
+                field_log_level=appsync.FieldLogLevel.ALL if self.env_name == "dev" else appsync.FieldLogLevel.ERROR,
+                exclude_verbose_content=self.env_name != "dev"
+            ),
+            xray_enabled=self.config.enable_xray_tracing
+        )
+        
+        # Create DynamoDB data source for Orders table
+        orders_data_source = self.graphql_api.add_dynamo_db_data_source(
+            "OrdersDataSource",
+            self.orders_table,
+            description="DynamoDB data source for Orders table"
+        )
+        
+        # Create DynamoDB data source for Payment Links table
+        payment_links_data_source = self.graphql_api.add_dynamo_db_data_source(
+            "PaymentLinksDataSource",
+            self.payment_links_table,
+            description="DynamoDB data source for Payment Links table"
+        )
+        
+        # Create HTTP data source for SQS integration
+        sqs_data_source = self.graphql_api.add_http_data_source(
+            "SQSDataSource",
+            f"https://sqs.{self.region}.amazonaws.com",
+            description="HTTP data source for SQS integration",
+            authorization_config=appsync.AwsIamConfig(
+                signing_region=self.region,
+                signing_service_name="sqs"
+            )
+        )
+        
+        # Grant SQS permissions to the HTTP data source service role
+        self.text_parser_queue.grant_send_messages(sqs_data_source.grant_principal)
+        
+        # Get resolver template paths
+        resolvers_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "appsync", "resolvers"
+        )
+        
+        # Helper function to read VTL templates
+        def read_template(filename: str) -> str:
+            with open(os.path.join(resolvers_path, filename), "r") as f:
+                return f.read()
+        
+        # Create Query resolvers
+        
+        # getOrder resolver
+        orders_data_source.create_resolver(
+            "GetOrderResolver",
+            type_name="Query",
+            field_name="getOrder",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Query.getOrder.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Query.getOrder.response.vtl")
+            )
+        )
+        
+        # listOrders resolver
+        orders_data_source.create_resolver(
+            "ListOrdersResolver",
+            type_name="Query",
+            field_name="listOrders",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Query.listOrders.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Query.listOrders.response.vtl")
+            )
+        )
+        
+        # getMyOrders resolver
+        orders_data_source.create_resolver(
+            "GetMyOrdersResolver",
+            type_name="Query",
+            field_name="getMyOrders",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Query.getMyOrders.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Query.getMyOrders.response.vtl")
+            )
+        )
+        
+        # getPaymentLink resolver
+        payment_links_data_source.create_resolver(
+            "GetPaymentLinkResolver",
+            type_name="Query",
+            field_name="getPaymentLink",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Query.getPaymentLink.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Query.getPaymentLink.response.vtl")
+            )
+        )
+        
+        # Create Mutation resolvers using Pipeline resolver for submitGroceryList
+        # First, create the DynamoDB function for storing the order
+        submit_dynamo_function = appsync.AppsyncFunction(
+            self,
+            "SubmitGroceryListDynamoFunction",
+            name="submitGroceryListDynamo",
+            api=self.graphql_api,
+            data_source=orders_data_source,
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.submitGroceryList.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.submitGroceryList.response.vtl")
+            )
+        )
+        
+        # Create the SQS function for queuing the message
+        # First, inject the queue URL into the request template
+        sqs_request_template = read_template("Mutation.submitGroceryList.sqs.request.vtl")
+        sqs_request_template_with_url = f'$util.qr($ctx.stash.put("queueUrl", "{self.text_parser_queue.queue_url}"))\n{sqs_request_template}'
+        
+        submit_sqs_function = appsync.AppsyncFunction(
+            self,
+            "SubmitGroceryListSQSFunction",
+            name="submitGroceryListSQS",
+            api=self.graphql_api,
+            data_source=sqs_data_source,
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                sqs_request_template_with_url
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.submitGroceryList.sqs.response.vtl")
+            )
+        )
+        
+        # Create Pipeline resolver for submitGroceryList
+        appsync.Resolver(
+            self,
+            "SubmitGroceryListResolver",
+            api=self.graphql_api,
+            type_name="Mutation",
+            field_name="submitGroceryList",
+            pipeline_config=[submit_dynamo_function, submit_sqs_function],
+            request_mapping_template=appsync.MappingTemplate.from_string("{}"),
+            response_mapping_template=appsync.MappingTemplate.from_string("$util.toJson($ctx.prev.result)")
+        )
+        
+        # cancelOrder resolver
+        orders_data_source.create_resolver(
+            "CancelOrderResolver",
+            type_name="Mutation",
+            field_name="cancelOrder",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.cancelOrder.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.cancelOrder.response.vtl")
+            )
+        )
+        
+        # Create Subscription resolvers (these use NONE data source)
+        none_data_source = self.graphql_api.add_none_data_source(
+            "NoneDataSource",
+            description="None data source for subscriptions"
+        )
+        
+        # onOrderStatusChanged subscription
+        none_data_source.create_resolver(
+            "OnOrderStatusChangedResolver",
+            type_name="Subscription",
+            field_name="onOrderStatusChanged",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Subscription.onOrderStatusChanged.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Subscription.onOrderStatusChanged.response.vtl")
+            )
+        )
+        
+        # onProcessingEvent subscription
+        none_data_source.create_resolver(
+            "OnProcessingEventResolver",
+            type_name="Subscription",
+            field_name="onProcessingEvent",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Subscription.onProcessingEvent.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Subscription.onProcessingEvent.response.vtl")
+            )
+        )
+        
+        # onPaymentStatusChanged subscription
+        none_data_source.create_resolver(
+            "OnPaymentStatusChangedResolver",
+            type_name="Subscription",
+            field_name="onPaymentStatusChanged",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Subscription.onPaymentStatusChanged.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Subscription.onPaymentStatusChanged.response.vtl")
+            )
+        )
+        
+        # Create AppSync log group
+        logs.LogGroup(
+            self,
+            "AppSyncLogGroup",
+            log_group_name=f"/aws/appsync/apis/{self.graphql_api.api_id}",
+            retention=self._get_log_retention(self.config.log_retention_days),
             removal_policy=RemovalPolicy.DESTROY
         )

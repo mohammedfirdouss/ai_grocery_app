@@ -1,0 +1,12 @@
+## GetPaymentLink Query - Request Mapping Template
+## Retrieves payment link for an order from DynamoDB
+
+#set($orderId = $ctx.args.orderId)
+
+{
+    "version": "2018-05-29",
+    "operation": "GetItem",
+    "key": {
+        "order_id": $util.dynamodb.toDynamoDBJson($orderId)
+    }
+}
