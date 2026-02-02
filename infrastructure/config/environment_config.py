@@ -39,6 +39,11 @@ class EnvironmentConfig:
     bedrock_model_id: str
     bedrock_max_tokens: int
     bedrock_temperature: float
+    bedrock_max_retries: int
+    bedrock_retry_delay_seconds: float
+    bedrock_uncertainty_threshold: float
+    bedrock_guardrails_enabled: bool
+    bedrock_knowledge_base_enabled: bool
     
     # PayStack settings
     paystack_base_url: str
@@ -86,10 +91,15 @@ class EnvironmentConfig:
             appsync_log_level="ALL",
             appsync_field_log_level="ALL",
             
-            # Bedrock - Claude 3.5 Sonnet
+            # Bedrock - Claude 3.5 Sonnet with retry and guardrails
             bedrock_model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",
             bedrock_max_tokens=4096,
             bedrock_temperature=0.1,
+            bedrock_max_retries=3,
+            bedrock_retry_delay_seconds=1.0,
+            bedrock_uncertainty_threshold=0.7,
+            bedrock_guardrails_enabled=True,
+            bedrock_knowledge_base_enabled=False,  # Can be enabled when KB is set up
             
             # PayStack - Test environment
             paystack_base_url="https://api.paystack.co",
@@ -124,10 +134,15 @@ class EnvironmentConfig:
             appsync_log_level="ERROR",
             appsync_field_log_level="ERROR",
             
-            # Bedrock - Claude 3.5 Sonnet
+            # Bedrock - Claude 3.5 Sonnet with production-like settings
             bedrock_model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",
             bedrock_max_tokens=4096,
             bedrock_temperature=0.1,
+            bedrock_max_retries=4,
+            bedrock_retry_delay_seconds=2.0,
+            bedrock_uncertainty_threshold=0.7,
+            bedrock_guardrails_enabled=True,
+            bedrock_knowledge_base_enabled=True,
             
             # PayStack - Production API
             paystack_base_url="https://api.paystack.co",
@@ -162,10 +177,15 @@ class EnvironmentConfig:
             appsync_log_level="ERROR",
             appsync_field_log_level="NONE",
             
-            # Bedrock - Claude 3.5 Sonnet
+            # Bedrock - Claude 3.5 Sonnet with production settings
             bedrock_model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",
             bedrock_max_tokens=4096,
             bedrock_temperature=0.1,
+            bedrock_max_retries=5,
+            bedrock_retry_delay_seconds=2.0,
+            bedrock_uncertainty_threshold=0.7,
+            bedrock_guardrails_enabled=True,
+            bedrock_knowledge_base_enabled=True,
             
             # PayStack - Production API
             paystack_base_url="https://api.paystack.co",
@@ -187,6 +207,11 @@ class EnvironmentConfig:
             "bedrock_model_id": self.bedrock_model_id,
             "bedrock_max_tokens": str(self.bedrock_max_tokens),
             "bedrock_temperature": str(self.bedrock_temperature),
+            "bedrock_max_retries": str(self.bedrock_max_retries),
+            "bedrock_retry_delay_seconds": str(self.bedrock_retry_delay_seconds),
+            "bedrock_uncertainty_threshold": str(self.bedrock_uncertainty_threshold),
+            "bedrock_guardrails_enabled": str(self.bedrock_guardrails_enabled),
+            "bedrock_knowledge_base_enabled": str(self.bedrock_knowledge_base_enabled),
             "paystack_base_url": self.paystack_base_url,
             "log_retention_days": str(self.log_retention_days)
         }
