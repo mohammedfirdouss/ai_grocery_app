@@ -85,6 +85,9 @@ class AiGroceryStack(Stack):
         # Create AppSync GraphQL API
         self._create_appsync_api()
         
+        # Configure Event Handler with AppSync API URL (must be after AppSync creation)
+        self._configure_event_handler_appsync()
+        
         # Create stack outputs
         self._create_outputs()
     
@@ -750,6 +753,32 @@ class AiGroceryStack(Stack):
             ]
         )
     
+    def _configure_event_handler_appsync(self) -> None:
+        """Configure Event Handler Lambda with AppSync API URL for real-time notifications."""
+        
+        # Add AppSync API URL as environment variable to Event Handler Lambda
+        self.event_handler_function.add_environment(
+            "APPSYNC_API_URL",
+            self.graphql_api.graphql_url
+        )
+        
+        self.event_handler_function.add_environment(
+            "EVENT_BUS_NAME",
+            self.event_bus.event_bus_name
+        )
+        
+        # Grant AppSync invoke permissions to Event Handler Lambda
+        self.event_handler_function.add_to_role_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["appsync:GraphQL"],
+                resources=[
+                    f"{self.graphql_api.arn}/*",
+                    f"{self.graphql_api.arn}/types/Mutation/*"
+                ]
+            )
+        )
+    
     def _create_outputs(self) -> None:
         """Create CloudFormation outputs for key resources."""
         
@@ -1019,7 +1048,9 @@ class AiGroceryStack(Stack):
             "appsync", "schema", "schema.graphql"
         )
         
-        # Create AppSync API with Cognito User Pool authorization
+        # Create AppSync API with Cognito User Pool and IAM authorization
+        # Cognito is used for user-facing operations
+        # IAM is used for backend services (Lambda) to publish notifications
         self.graphql_api = appsync.GraphqlApi(
             self,
             "AiGroceryGraphQLApi",
@@ -1031,7 +1062,12 @@ class AiGroceryStack(Stack):
                     user_pool_config=appsync.UserPoolConfig(
                         user_pool=self.user_pool
                     )
-                )
+                ),
+                additional_authorization_modes=[
+                    appsync.AuthorizationMode(
+                        authorization_type=appsync.AuthorizationType.IAM
+                    )
+                ]
             ),
             log_config=appsync.LogConfig(
                 field_log_level=appsync.FieldLogLevel.ALL if self.env_name == "dev" else appsync.FieldLogLevel.ERROR,
@@ -1265,6 +1301,73 @@ class AiGroceryStack(Stack):
             ),
             response_mapping_template=appsync.MappingTemplate.from_string(
                 read_template("Subscription.onPaymentStatusChanged.response.vtl")
+            )
+        )
+        
+        # onErrorNotification subscription
+        none_data_source.create_resolver(
+            "OnErrorNotificationResolver",
+            type_name="Subscription",
+            field_name="onErrorNotification",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Subscription.onErrorNotification.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Subscription.onErrorNotification.response.vtl")
+            )
+        )
+        
+        # Create publish mutation resolvers (IAM auth for backend services)
+        
+        # publishOrderUpdate mutation
+        none_data_source.create_resolver(
+            "PublishOrderUpdateResolver",
+            type_name="Mutation",
+            field_name="publishOrderUpdate",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.publishOrderUpdate.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.publishOrderUpdate.response.vtl")
+            )
+        )
+        
+        # publishProcessingEvent mutation
+        none_data_source.create_resolver(
+            "PublishProcessingEventResolver",
+            type_name="Mutation",
+            field_name="publishProcessingEvent",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.publishProcessingEvent.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.publishProcessingEvent.response.vtl")
+            )
+        )
+        
+        # publishPaymentStatus mutation
+        none_data_source.create_resolver(
+            "PublishPaymentStatusResolver",
+            type_name="Mutation",
+            field_name="publishPaymentStatus",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.publishPaymentStatus.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.publishPaymentStatus.response.vtl")
+            )
+        )
+        
+        # broadcastErrorNotification mutation
+        none_data_source.create_resolver(
+            "BroadcastErrorNotificationResolver",
+            type_name="Mutation",
+            field_name="broadcastErrorNotification",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.broadcastErrorNotification.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.broadcastErrorNotification.response.vtl")
             )
         )
         

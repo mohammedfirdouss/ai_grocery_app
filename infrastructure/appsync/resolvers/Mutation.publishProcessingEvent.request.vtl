@@ -1,0 +1,15 @@
+## PublishProcessingEvent Mutation - Request Mapping Template
+## Used by backend services to publish processing events via IAM auth
+
+{
+    "version": "2018-05-29",
+    "payload": {
+        "orderId": $util.toJson($ctx.args.input.orderId),
+        "eventType": $util.toJson($ctx.args.input.eventType),
+        "status": $util.toJson($ctx.args.input.status),
+        "message": $util.toJson($ctx.args.input.message),
+        "correlationId": $util.toJson($ctx.args.input.correlationId),
+        "timestamp": $util.toJson($ctx.args.input.timestamp),
+        "data": $util.toJson($ctx.args.input.data)
+    }
+}

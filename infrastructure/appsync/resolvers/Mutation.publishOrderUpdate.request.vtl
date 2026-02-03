@@ -1,0 +1,15 @@
+## PublishOrderUpdate Mutation - Request Mapping Template
+## Used by backend services to publish order status updates via IAM auth
+
+{
+    "version": "2018-05-29",
+    "payload": {
+        "id": $util.toJson($ctx.args.input.orderId),
+        "orderId": $util.toJson($ctx.args.input.orderId),
+        "status": $util.toJson($ctx.args.input.status),
+        "customerEmail": $util.toJson($ctx.args.input.customerEmail),
+        "correlationId": $util.toJson($ctx.args.input.correlationId),
+        "updatedAt": $util.toJson($ctx.args.input.timestamp),
+        "data": $util.toJson($ctx.args.input.data)
+    }
+}
