@@ -7,6 +7,7 @@ infrastructure for comprehensive system monitoring.
 
 from aws_cdk import (
     Duration,
+    Stack,
     aws_cloudwatch as cloudwatch,
     aws_cloudwatch_actions as cloudwatch_actions,
     aws_sns as sns,
@@ -599,15 +600,54 @@ class MonitoringConstruct(Construct):
         )
         
         # Add permissions to check health of other services
+        # Build specific resource ARNs for least privilege access
+        dynamodb_table_arns = [
+            table.table_arn for table in self.dynamodb_tables.values()
+        ]
+        
+        sqs_queue_arns = [
+            queue.queue_arn for queue in self.sqs_queues.values()
+        ]
+        
+        lambda_function_arns = [
+            func.function_arn for func in self.lambda_functions.values()
+        ]
+        
+        # DynamoDB DescribeTable permissions
+        if dynamodb_table_arns:
+            health_check_role.add_to_policy(iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["dynamodb:DescribeTable"],
+                resources=dynamodb_table_arns
+            ))
+        
+        # SQS GetQueueAttributes permissions
+        if sqs_queue_arns:
+            health_check_role.add_to_policy(iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["sqs:GetQueueAttributes"],
+                resources=sqs_queue_arns
+            ))
+        
+        # Lambda GetFunction permissions
+        if lambda_function_arns:
+            health_check_role.add_to_policy(iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["lambda:GetFunction"],
+                resources=lambda_function_arns
+            ))
+        
+        # CloudWatch PutMetricData permission (namespace-scoped is not supported,
+        # but we limit to specific metric namespace via condition)
         health_check_role.add_to_policy(iam.PolicyStatement(
             effect=iam.Effect.ALLOW,
-            actions=[
-                "dynamodb:DescribeTable",
-                "sqs:GetQueueAttributes",
-                "lambda:GetFunction",
-                "cloudwatch:GetMetricData"
-            ],
-            resources=["*"]  # Health check needs to access multiple resources
+            actions=["cloudwatch:PutMetricData"],
+            resources=["*"],
+            conditions={
+                "StringEquals": {
+                    "cloudwatch:namespace": f"AiGroceryApp/{self.env_name}"
+                }
+            }
         ))
         
         # Create the health check Lambda function
