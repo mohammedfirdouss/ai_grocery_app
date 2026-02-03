@@ -7,7 +7,7 @@ It uses the PayStack client for API integration with itemized breakdown support.
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from aws_lambda_powertools import Logger, Tracer, Metrics
@@ -173,7 +173,7 @@ def store_payment_link(
     table = dynamodb.Table(PAYMENT_LINKS_TABLE_NAME)
     
     # Calculate TTL based on configured expiration hours
-    expires_at = int((datetime.utcnow() + timedelta(hours=PAYMENT_EXPIRATION_HOURS)).timestamp())
+    expires_at = int((datetime.now(timezone.utc) + timedelta(hours=PAYMENT_EXPIRATION_HOURS)).timestamp())
     
     item = {
         "order_id": order_id,
@@ -184,7 +184,7 @@ def store_payment_link(
         "amount": Decimal(str(total_amount)),
         "currency": "NGN",
         "status": "PENDING",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "expires_at": expires_at,
         "expiration_hours": PAYMENT_EXPIRATION_HOURS
     }
@@ -241,7 +241,7 @@ def update_order_with_payment(
         ":status": "PAYMENT_LINK_CREATED",
         ":link": payment_link,
         ":payment_status": "PENDING",
-        ":updated_at": datetime.utcnow().isoformat()
+        ":updated_at": datetime.now(timezone.utc).isoformat()
     }
     
     if payment_reference:
@@ -283,7 +283,7 @@ def publish_payment_event(
         "order_id": order_id,
         "payment_link": payment_link,
         "customer_email": customer_email,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
     
     if total_amount is not None:

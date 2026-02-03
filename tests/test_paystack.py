@@ -8,7 +8,7 @@ import hashlib
 import hmac
 import json
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import Mock, patch, MagicMock
 import urllib.error
@@ -124,7 +124,7 @@ class TestPayStackModels:
             authorization_url="https://checkout.paystack.com/abc123",
             access_code="abc123",
             reference="order-123",
-            expires_at=datetime.utcnow() + timedelta(hours=24),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             message="Authorization URL created"
         )
         
@@ -199,7 +199,7 @@ class TestPayStackModels:
             status=PayStackTransactionStatus.SUCCESS,
             amount=150000,
             reference="order-123",
-            paid_at=datetime.utcnow(),
+            paid_at=datetime.now(timezone.utc),
             message="Verification successful"
         )
         
@@ -226,7 +226,7 @@ class TestPayStackClient:
     
     def test_client_initialization_no_api_key(self):
         """Test client initialization fails without API key."""
-        with pytest.raises(ValueError, match="API key is required"):
+        with pytest.raises(ValueError, match="API key must not be empty"):
             PayStackClient(api_key="")
     
     def test_client_strips_trailing_slash(self):

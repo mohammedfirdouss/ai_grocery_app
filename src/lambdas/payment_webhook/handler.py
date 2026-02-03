@@ -7,7 +7,7 @@ It validates webhook signatures, processes payment events, and updates order sta
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
@@ -31,6 +31,9 @@ ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
 ORDERS_TABLE_NAME = os.environ.get("ORDERS_TABLE_NAME", "")
 PAYMENT_LINKS_TABLE_NAME = os.environ.get("PAYMENT_LINKS_TABLE_NAME", "")
 PAYSTACK_SECRET_ARN = os.environ.get("PAYSTACK_SECRET_ARN", "")
+
+# Event bus name constant for consistency
+EVENT_BUS_NAME = f"ai-grocery-events-{ENVIRONMENT}"
 
 # Cache for PayStack API key
 _paystack_api_key: Optional[str] = None
@@ -106,7 +109,7 @@ def update_payment_status(order_id: str, status: str, paid_at: Optional[str] = N
     update_expression = "SET #status = :status, updated_at = :updated_at"
     expression_values = {
         ":status": status.upper(),
-        ":updated_at": datetime.utcnow().isoformat()
+        ":updated_at": datetime.now(timezone.utc).isoformat()
     }
     
     if paid_at:
@@ -193,7 +196,7 @@ def update_order_payment_status(order_id: str, created_at: str, status: str) -> 
             ExpressionAttributeValues={
                 ":payment_status": mapped_status,
                 ":order_status": order_status,
-                ":updated_at": datetime.utcnow().isoformat()
+                ":updated_at": datetime.now(timezone.utc).isoformat()
             }
         )
         logger.info("Order payment status updated", extra={"order_id": order_id, "payment_status": mapped_status})
@@ -223,7 +226,7 @@ def publish_payment_status_event(
     detail = {
         "order_id": order_id,
         "status": status,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
     
     if amount is not None:
@@ -239,7 +242,7 @@ def publish_payment_status_event(
                     "Source": "ai-grocery.payments",
                     "DetailType": event_type,
                     "Detail": json.dumps(detail),
-                    "EventBusName": f"ai-grocery-events-{ENVIRONMENT}"
+                    "EventBusName": EVENT_BUS_NAME
                 }
             ]
         )

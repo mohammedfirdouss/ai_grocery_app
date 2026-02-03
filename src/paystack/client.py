@@ -11,7 +11,7 @@ import json
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from aws_lambda_powertools import Logger
@@ -107,7 +107,7 @@ class PayStackClient:
             expiration_hours: Hours until payment link expires
         """
         if not api_key:
-            raise ValueError("PayStack API key is required")
+            raise ValueError("PayStack API key must not be empty")
         
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -281,7 +281,7 @@ class PayStackClient:
             
             if response_data.get("status"):
                 data = response_data.get("data", {})
-                expires_at = datetime.utcnow() + timedelta(hours=self.expiration_hours)
+                expires_at = datetime.now(timezone.utc) + timedelta(hours=self.expiration_hours)
                 
                 logger.info(
                     "Payment initialized successfully",
