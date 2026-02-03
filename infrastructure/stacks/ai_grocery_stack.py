@@ -88,6 +88,8 @@ class AiGroceryStack(Stack):
         
         # Create monitoring and observability infrastructure
         self._create_monitoring_infrastructure()
+        # Configure Event Handler with AppSync API URL (must be after AppSync creation)
+        self._configure_event_handler_appsync()
         
         # Create stack outputs
         self._create_outputs()
@@ -454,6 +456,7 @@ class AiGroceryStack(Stack):
             environment={
                 **common_env,
                 "PAYSTACK_BASE_URL": self.config.paystack_base_url,
+                "PAYMENT_EXPIRATION_HOURS": "24",
             },
             tracing=lambda_.Tracing.ACTIVE if self.config.enable_xray_tracing else lambda_.Tracing.DISABLED,
         )
@@ -466,6 +469,23 @@ class AiGroceryStack(Stack):
                 max_batching_window=Duration.seconds(0),
                 report_batch_item_failures=True,
             )
+        )
+        
+        # Payment Webhook Handler Lambda Function (for PayStack webhooks)
+        self.payment_webhook_function = lambda_.Function(
+            self,
+            "PaymentWebhookFunction",
+            function_name=f"ai-grocery-payment-webhook-{self.env_name}",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            handler="handler.lambda_handler",
+            code=lambda_.Code.from_asset("src/lambdas/payment_webhook"),
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            reserved_concurrent_executions=self.config.lambda_reserved_concurrency,
+            role=self.lambda_execution_role,
+            layers=[self.shared_layer],
+            environment=common_env,
+            tracing=lambda_.Tracing.ACTIVE if self.config.enable_xray_tracing else lambda_.Tracing.DISABLED,
         )
         
         # Event Handler Lambda Function (for EventBridge events)
@@ -597,6 +617,7 @@ class AiGroceryStack(Stack):
             self.text_parser_function,
             self.product_matcher_function,
             self.payment_processor_function,
+            self.payment_webhook_function,
             self.event_handler_function
         ]:
             self.orders_table.grant_read_write_data(func)
@@ -606,6 +627,7 @@ class AiGroceryStack(Stack):
         
         # Grant Secrets Manager access
         self.paystack_secret.grant_read(self.payment_processor_function)
+        self.paystack_secret.grant_read(self.payment_webhook_function)
         self.bedrock_secret.grant_read(self.product_matcher_function)
     
     def _create_eventbridge_infrastructure(self) -> None:
@@ -752,6 +774,32 @@ class AiGroceryStack(Stack):
                     retry_attempts=3
                 )
             ]
+        )
+    
+    def _configure_event_handler_appsync(self) -> None:
+        """Configure Event Handler Lambda with AppSync API URL for real-time notifications."""
+        
+        # Add AppSync API URL as environment variable to Event Handler Lambda
+        self.event_handler_function.add_environment(
+            "APPSYNC_API_URL",
+            self.graphql_api.graphql_url
+        )
+        
+        self.event_handler_function.add_environment(
+            "EVENT_BUS_NAME",
+            self.event_bus.event_bus_name
+        )
+        
+        # Grant AppSync invoke permissions to Event Handler Lambda
+        self.event_handler_function.add_to_role_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["appsync:GraphQL"],
+                resources=[
+                    f"{self.graphql_api.arn}/*",
+                    f"{self.graphql_api.arn}/types/Mutation/*"
+                ]
+            )
         )
     
     def _create_outputs(self) -> None:
@@ -951,6 +999,16 @@ class AiGroceryStack(Stack):
             encryption_key=self.kms_key,
             removal_policy=RemovalPolicy.DESTROY
         )
+        
+        # Log group for payment webhook Lambda
+        logs.LogGroup(
+            self,
+            "PaymentWebhookLogGroup",
+            log_group_name=f"/aws/lambda/ai-grocery-payment-webhook-{self.env_name}",
+            retention=retention,
+            encryption_key=self.kms_key,
+            removal_policy=RemovalPolicy.DESTROY
+        )
     
     def _create_cognito_user_pool(self) -> None:
         """Create Cognito User Pool for authentication."""
@@ -1023,7 +1081,9 @@ class AiGroceryStack(Stack):
             "appsync", "schema", "schema.graphql"
         )
         
-        # Create AppSync API with Cognito User Pool authorization
+        # Create AppSync API with Cognito User Pool and IAM authorization
+        # Cognito is used for user-facing operations
+        # IAM is used for backend services (Lambda) to publish notifications
         self.graphql_api = appsync.GraphqlApi(
             self,
             "AiGroceryGraphQLApi",
@@ -1035,7 +1095,12 @@ class AiGroceryStack(Stack):
                     user_pool_config=appsync.UserPoolConfig(
                         user_pool=self.user_pool
                     )
-                )
+                ),
+                additional_authorization_modes=[
+                    appsync.AuthorizationMode(
+                        authorization_type=appsync.AuthorizationType.IAM
+                    )
+                ]
             ),
             log_config=appsync.LogConfig(
                 field_log_level=appsync.FieldLogLevel.ALL if self.env_name == "dev" else appsync.FieldLogLevel.ERROR,
@@ -1269,6 +1334,73 @@ class AiGroceryStack(Stack):
             ),
             response_mapping_template=appsync.MappingTemplate.from_string(
                 read_template("Subscription.onPaymentStatusChanged.response.vtl")
+            )
+        )
+        
+        # onErrorNotification subscription
+        none_data_source.create_resolver(
+            "OnErrorNotificationResolver",
+            type_name="Subscription",
+            field_name="onErrorNotification",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Subscription.onErrorNotification.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Subscription.onErrorNotification.response.vtl")
+            )
+        )
+        
+        # Create publish mutation resolvers (IAM auth for backend services)
+        
+        # publishOrderUpdate mutation
+        none_data_source.create_resolver(
+            "PublishOrderUpdateResolver",
+            type_name="Mutation",
+            field_name="publishOrderUpdate",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.publishOrderUpdate.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.publishOrderUpdate.response.vtl")
+            )
+        )
+        
+        # publishProcessingEvent mutation
+        none_data_source.create_resolver(
+            "PublishProcessingEventResolver",
+            type_name="Mutation",
+            field_name="publishProcessingEvent",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.publishProcessingEvent.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.publishProcessingEvent.response.vtl")
+            )
+        )
+        
+        # publishPaymentStatus mutation
+        none_data_source.create_resolver(
+            "PublishPaymentStatusResolver",
+            type_name="Mutation",
+            field_name="publishPaymentStatus",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.publishPaymentStatus.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.publishPaymentStatus.response.vtl")
+            )
+        )
+        
+        # broadcastErrorNotification mutation
+        none_data_source.create_resolver(
+            "BroadcastErrorNotificationResolver",
+            type_name="Mutation",
+            field_name="broadcastErrorNotification",
+            request_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.broadcastErrorNotification.request.vtl")
+            ),
+            response_mapping_template=appsync.MappingTemplate.from_string(
+                read_template("Mutation.broadcastErrorNotification.response.vtl")
             )
         )
         

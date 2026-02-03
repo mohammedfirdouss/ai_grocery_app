@@ -1,0 +1,14 @@
+## PublishPaymentStatus Mutation - Request Mapping Template
+## Used by backend services to publish payment status updates via IAM auth
+
+{
+    "version": "2018-05-29",
+    "payload": {
+        "orderId": $util.toJson($ctx.args.input.orderId),
+        "status": $util.toJson($ctx.args.input.status),
+        "paymentUrl": $util.toJson($ctx.args.input.paymentUrl),
+        "amount": $util.toJson($ctx.args.input.amount),
+        "currency": $util.toJson($ctx.args.input.currency),
+        "timestamp": $util.toJson($ctx.args.input.timestamp)
+    }
+}

@@ -118,6 +118,7 @@ class TestAppSyncSchema:
             "onOrderStatusChanged(orderId: ID!): Order",
             "onProcessingEvent(orderId: ID!): ProcessingEvent",
             "onPaymentStatusChanged(orderId: ID!): PaymentLink",
+            "onErrorNotification(orderId: ID!): ErrorNotification",
         ]
         
         for subscription in required_subscriptions:
