@@ -61,7 +61,9 @@ def extract_dynamodb_value(item: Dict[str, Any], key: str, default: Any = None) 
     if "S" in attr:
         return attr["S"]
     elif "N" in attr:
-        return float(attr["N"]) if "." in attr["N"] else int(attr["N"])
+        # Use float always and convert to int only when it's a whole number
+        num = float(attr["N"])
+        return int(num) if num.is_integer() else num
     elif "BOOL" in attr:
         return attr["BOOL"]
     elif "NULL" in attr:
@@ -69,7 +71,8 @@ def extract_dynamodb_value(item: Dict[str, Any], key: str, default: Any = None) 
     elif "L" in attr:
         return [extract_dynamodb_value({"v": v}, "v") for v in attr["L"]]
     elif "M" in attr:
-        return {k: extract_dynamodb_value(v, k) for k, v in attr["M"].items()}
+        # For maps, recursively extract each value from its DynamoDB format
+        return {k: extract_dynamodb_value({"v": v}, "v") for k, v in attr["M"].items()}
     
     return default
 
@@ -197,7 +200,9 @@ def handle_order_update(detail: Dict[str, Any]) -> Dict[str, Any]:
         if should_publish_notification(transformed) and APPSYNC_API_URL:
             try:
                 appsync_client = get_appsync_client()
-                notification_published = appsync_client.publish_order_update(
+                
+                # Track order update notification
+                order_update_published = appsync_client.publish_order_update(
                     order_id=order_id,
                     status=new_status,
                     customer_email=customer_email,
@@ -209,8 +214,8 @@ def handle_order_update(detail: Dict[str, Any]) -> Dict[str, Any]:
                     }
                 )
                 
-                # Also publish processing event for detailed tracking
-                appsync_client.publish_processing_event(
+                # Track processing event notification separately
+                processing_event_published = appsync_client.publish_processing_event(
                     order_id=order_id,
                     event_type=f"STATUS_CHANGED_{event_type}",
                     status=new_status,
@@ -222,10 +227,17 @@ def handle_order_update(detail: Dict[str, Any]) -> Dict[str, Any]:
                     }
                 )
                 
-                if notification_published:
-                    metrics.add_metric(name="NotificationPublished", unit="Count", value=1)
+                # Track metrics for both notifications
+                if order_update_published:
+                    metrics.add_metric(name="OrderUpdateNotificationPublished", unit="Count", value=1)
+                    notification_published = True
                 else:
-                    metrics.add_metric(name="NotificationFailed", unit="Count", value=1)
+                    metrics.add_metric(name="OrderUpdateNotificationFailed", unit="Count", value=1)
+                
+                if processing_event_published:
+                    metrics.add_metric(name="ProcessingEventNotificationPublished", unit="Count", value=1)
+                else:
+                    metrics.add_metric(name="ProcessingEventNotificationFailed", unit="Count", value=1)
                     
             except Exception as e:
                 logger.exception(

@@ -99,7 +99,8 @@ class AppSyncClient:
                 method="POST"
             )
             
-            with urllib.request.urlopen(req, timeout=30) as response:
+            # Use 10-second timeout for better responsiveness in real-time notifications
+            with urllib.request.urlopen(req, timeout=10) as response:
                 result = json.loads(response.read().decode("utf-8"))
                 
                 if "errors" in result:
