@@ -30,6 +30,7 @@ from typing import Dict, Any, Optional
 import os
 
 from infrastructure.config.environment_config import EnvironmentConfig
+from infrastructure.monitoring.monitoring_construct import MonitoringConstruct
 
 
 class AiGroceryStack(Stack):
@@ -85,6 +86,8 @@ class AiGroceryStack(Stack):
         # Create AppSync GraphQL API
         self._create_appsync_api()
         
+        # Create monitoring and observability infrastructure
+        self._create_monitoring_infrastructure()
         # Configure Event Handler with AppSync API URL (must be after AppSync creation)
         self._configure_event_handler_appsync()
         
@@ -1408,4 +1411,45 @@ class AiGroceryStack(Stack):
             log_group_name=f"/aws/appsync/apis/{self.graphql_api.api_id}",
             retention=self._get_log_retention(self.config.log_retention_days),
             removal_policy=RemovalPolicy.DESTROY
+        )
+    
+    def _create_monitoring_infrastructure(self) -> None:
+        """Create monitoring and observability infrastructure."""
+        # Collect Lambda functions
+        lambda_functions = {
+            "text-parser": self.text_parser_function,
+            "product-matcher": self.product_matcher_function,
+            "payment-processor": self.payment_processor_function,
+            "event-handler": self.event_handler_function,
+        }
+        
+        # Collect SQS queues
+        sqs_queues = {
+            "text-parser": self.text_parser_queue,
+            "text-parser-dlq": self.text_parser_dlq,
+            "product-matcher": self.product_matcher_queue,
+            "product-matcher-dlq": self.product_matcher_dlq,
+            "payment-processor": self.payment_processor_queue,
+            "payment-processor-dlq": self.payment_processor_dlq,
+            "eventbridge-dlq": self.eventbridge_dlq,
+            "main-dlq": self.main_dlq,
+        }
+        
+        # Collect DynamoDB tables
+        dynamodb_tables = {
+            "orders": self.orders_table,
+            "products": self.products_table,
+            "payment-links": self.payment_links_table,
+        }
+        
+        # Create monitoring construct using configuration values
+        self.monitoring = MonitoringConstruct(
+            self,
+            "Monitoring",
+            env_name=self.env_name,
+            lambda_functions=lambda_functions,
+            sqs_queues=sqs_queues,
+            dynamodb_tables=dynamodb_tables,
+            alarm_email=self.config.alarm_email,
+            monthly_budget_limit=self.config.monthly_budget_limit
         )
