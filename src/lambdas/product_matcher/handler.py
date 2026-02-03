@@ -31,6 +31,15 @@ from src.bedrock.extractors import (
     ExtractionResult,
     ExtractedGroceryItem,
 )
+from src.lambdas.product_matcher.matching import (
+    ProductMatcher,
+    MatchResult,
+)
+from src.lambdas.product_matcher.pricing import (
+    PricingCalculator,
+    TaxCalculator,
+    InventoryChecker,
+)
 
 # Initialize AWS Lambda Powertools
 logger = Logger()
@@ -57,8 +66,11 @@ processor = BatchProcessor(event_type=EventType.SQS)
 
 # Initialize Bedrock client (lazy initialization)
 _bedrock_client: Optional[BedrockAgentClient] = None
+_bedrock_runtime_client: Optional[Any] = None
 _extractor: Optional[GroceryItemExtractor] = None
 _confidence_scorer: Optional[ConfidenceScorer] = None
+_product_matcher: Optional[ProductMatcher] = None
+_pricing_calculator: Optional[PricingCalculator] = None
 
 
 def get_bedrock_client() -> BedrockAgentClient:
@@ -91,6 +103,39 @@ def get_confidence_scorer() -> ConfidenceScorer:
     if _confidence_scorer is None:
         _confidence_scorer = ConfidenceScorer(base_threshold=UNCERTAINTY_THRESHOLD)
     return _confidence_scorer
+
+
+def get_bedrock_runtime_client():
+    """Get or create Bedrock Runtime client for embeddings."""
+    global _bedrock_runtime_client
+    if _bedrock_runtime_client is None:
+        _bedrock_runtime_client = boto3.client("bedrock-runtime")
+    return _bedrock_runtime_client
+
+
+def get_product_matcher() -> ProductMatcher:
+    """Get or create product matcher instance."""
+    global _product_matcher
+    if _product_matcher is None:
+        bedrock_runtime = get_bedrock_runtime_client()
+        _product_matcher = ProductMatcher(
+            levenshtein_threshold=0.75,
+            embedding_threshold=0.8,
+            bedrock_client=bedrock_runtime
+        )
+    return _product_matcher
+
+
+def get_pricing_calculator() -> PricingCalculator:
+    """Get or create pricing calculator instance."""
+    global _pricing_calculator
+    if _pricing_calculator is None:
+        _pricing_calculator = PricingCalculator(
+            tax_calculator=TaxCalculator(),
+            inventory_checker=InventoryChecker(),
+            currency="NGN"
+        )
+    return _pricing_calculator
 
 
 @tracer.capture_method
@@ -187,123 +232,157 @@ def match_products(
     """
     Match extracted items against the product catalog.
     
+    Uses comprehensive matching strategies including:
+    - Exact name matching
+    - Fuzzy matching with Levenshtein distance
+    - Category-based matching with ML embeddings
+    - Alternative product suggestions
+    
     Args:
         extracted_items: List of items extracted by Bedrock
         
     Returns:
-        List of matched products with pricing
+        List of matched products with pricing and alternatives
     """
     products_table = dynamodb.Table(PRODUCTS_TABLE_NAME)
+    product_matcher = get_product_matcher()
     matched_items = []
+    
+    # Scan products table to get catalog (in production, use better caching/indexing)
+    try:
+        response = products_table.scan(Limit=1000)
+        all_products = response.get("Items", [])
+        
+        logger.info(
+            "Loaded product catalog",
+            extra={"product_count": len(all_products)}
+        )
+    except ClientError as e:
+        logger.error(
+            "Failed to load product catalog",
+            extra={"error": str(e)}
+        )
+        all_products = []
     
     for item in extracted_items:
         item_name = item.name.lower()
         quantity = item.quantity
+        category = item.category if hasattr(item, 'category') else None
         
-        # Try exact match first
-        try:
-            response = products_table.query(
-                IndexName="name-index",
-                KeyConditionExpression="name = :name",
-                ExpressionAttributeValues={":name": item_name}
+        # Try comprehensive matching
+        match_result = product_matcher.match_product(
+            item_name=item_name,
+            products=all_products,
+            category=category,
+            name_field="name"
+        )
+        
+        if match_result:
+            product = match_result.product
+            unit_price = Decimal(str(product.get("unit_price", 0)))
+            
+            # Calculate comprehensive match confidence
+            match_confidence = min(
+                item.confidence,  # AI extraction confidence
+                match_result.confidence,  # Matching confidence
             )
             
-            if response.get("Items"):
-                product = response["Items"][0]
-                unit_price = Decimal(str(product.get("unit_price", 0)))
-                
-                # Calculate comprehensive match confidence
-                scorer = get_confidence_scorer()
-                match_confidence = min(
-                    item.confidence,  # AI extraction confidence
-                    1.0,  # Exact match confidence
-                )
-                
-                matched_items.append({
-                    "extracted_item": item.to_dict(),
-                    "product_id": product.get("product_id"),
-                    "product_name": product.get("name"),
-                    "unit_price": float(unit_price),
-                    "total_price": float(unit_price * Decimal(str(quantity))),
-                    "availability": product.get("availability", True),
-                    "match_confidence": match_confidence,
-                    "match_type": "exact",
-                    "extraction_confidence": item.confidence,
-                    "uncertainty_reasons": [r.value for r in item.uncertainty_reasons],
-                })
-                
-                logger.debug(
-                    "Exact match found",
-                    extra={
-                        "item_name": item_name,
-                        "product_id": product.get("product_id"),
-                        "match_confidence": match_confidence,
-                    }
-                )
-            else:
-                # Try fuzzy matching (simplified - would use more sophisticated matching in production)
-                fuzzy_match = _try_fuzzy_match(item_name, products_table)
-                
-                if fuzzy_match:
-                    product = fuzzy_match["product"]
-                    unit_price = Decimal(str(product.get("unit_price", 0)))
-                    
-                    matched_items.append({
-                        "extracted_item": item.to_dict(),
-                        "product_id": product.get("product_id"),
-                        "product_name": product.get("name"),
-                        "unit_price": float(unit_price),
-                        "total_price": float(unit_price * Decimal(str(quantity))),
-                        "availability": product.get("availability", True),
-                        "match_confidence": fuzzy_match["confidence"] * item.confidence,
-                        "match_type": "fuzzy",
-                        "extraction_confidence": item.confidence,
-                        "uncertainty_reasons": [r.value for r in item.uncertainty_reasons],
-                    })
-                else:
-                    # No match found - add as unmatched
-                    matched_items.append({
-                        "extracted_item": item.to_dict(),
-                        "product_id": None,
-                        "product_name": item_name,
-                        "unit_price": 0,
-                        "total_price": 0,
-                        "availability": False,
-                        "match_confidence": 0,
-                        "match_type": "unmatched",
-                        "extraction_confidence": item.confidence,
-                        "uncertainty_reasons": [r.value for r in item.uncertainty_reasons],
-                    })
-                    
-                    logger.warning(
-                        "No product match found",
-                        extra={
-                            "item_name": item_name,
-                            "extraction_confidence": item.confidence,
-                        }
-                    )
-                
-        except ClientError as e:
-            logger.warning(
-                "Product lookup failed",
-                extra={"item": item_name, "error": str(e)}
+            # Find alternative products
+            alternatives = product_matcher.find_alternatives(
+                item_name=item_name,
+                products=all_products,
+                category=category,
+                max_alternatives=3,
+                name_field="name"
             )
+            
+            # Filter out the matched product and format alternatives
+            alternative_ids = [
+                alt[0].get("product_id")
+                for alt in alternatives
+                if alt[0].get("product_id") != product.get("product_id") and alt[1] > 0.6
+            ][:3]
+            
+            matched_items.append({
+                "extracted_item": item.to_dict(),
+                "product_id": product.get("product_id"),
+                "product_name": product.get("name"),
+                "category": product.get("category", ""),
+                "unit_price": float(unit_price),
+                "total_price": float(unit_price * Decimal(str(quantity))),
+                "availability": product.get("availability", True),
+                "stock_quantity": product.get("stock_quantity"),
+                "match_confidence": match_confidence,
+                "match_type": match_result.match_type,
+                "similarity_score": match_result.similarity_score,
+                "extraction_confidence": item.confidence,
+                "uncertainty_reasons": [r.value for r in item.uncertainty_reasons],
+                "alternative_products": alternative_ids,
+            })
+            
+            logger.debug(
+                "Product matched",
+                extra={
+                    "item_name": item_name,
+                    "product_id": product.get("product_id"),
+                    "match_type": match_result.match_type,
+                    "match_confidence": match_confidence,
+                    "alternatives_count": len(alternative_ids),
+                }
+            )
+        else:
+            # No match found - try to find alternatives anyway
+            alternatives = product_matcher.find_alternatives(
+                item_name=item_name,
+                products=all_products,
+                category=category,
+                max_alternatives=3,
+                name_field="name"
+            )
+            
+            suggested_products = [
+                {
+                    "product_id": alt[0].get("product_id"),
+                    "product_name": alt[0].get("name"),
+                    "similarity_score": alt[1],
+                }
+                for alt in alternatives if alt[1] > 0.5
+            ][:3]
+            
             matched_items.append({
                 "extracted_item": item.to_dict(),
                 "product_id": None,
                 "product_name": item_name,
+                "category": category or "",
                 "unit_price": 0,
                 "total_price": 0,
                 "availability": False,
                 "match_confidence": 0,
-                "match_type": "error",
+                "match_type": "unmatched",
+                "similarity_score": 0.0,
                 "extraction_confidence": item.confidence,
                 "uncertainty_reasons": [r.value for r in item.uncertainty_reasons],
+                "alternative_products": [],
+                "suggested_products": suggested_products,
             })
+            
+            logger.warning(
+                "No product match found",
+                extra={
+                    "item_name": item_name,
+                    "extraction_confidence": item.confidence,
+                    "suggestions_count": len(suggested_products),
+                }
+            )
     
     # Emit matching metrics
     matched_count = sum(1 for item in matched_items if item["match_type"] != "unmatched")
     unmatched_count = len(matched_items) - matched_count
+    
+    # Count by match type
+    exact_matches = sum(1 for item in matched_items if item["match_type"] == "exact")
+    fuzzy_matches = sum(1 for item in matched_items if "fuzzy" in item["match_type"] or "levenshtein" in item["match_type"])
+    embedding_matches = sum(1 for item in matched_items if "embedding" in item["match_type"])
     
     metrics.add_metric(
         name="ProductsMatched",
@@ -315,50 +394,35 @@ def match_products(
         unit=MetricUnit.Count,
         value=unmatched_count
     )
+    metrics.add_metric(
+        name="ExactMatches",
+        unit=MetricUnit.Count,
+        value=exact_matches
+    )
+    metrics.add_metric(
+        name="FuzzyMatches",
+        unit=MetricUnit.Count,
+        value=fuzzy_matches
+    )
+    metrics.add_metric(
+        name="EmbeddingMatches",
+        unit=MetricUnit.Count,
+        value=embedding_matches
+    )
+    
+    logger.info(
+        "Product matching completed",
+        extra={
+            "total_items": len(matched_items),
+            "matched": matched_count,
+            "unmatched": unmatched_count,
+            "exact": exact_matches,
+            "fuzzy": fuzzy_matches,
+            "embedding": embedding_matches,
+        }
+    )
     
     return matched_items
-
-
-def _try_fuzzy_match(
-    item_name: str,
-    products_table
-) -> Optional[Dict[str, Any]]:
-    """
-    Try fuzzy matching for an item name.
-    
-    This is a simplified implementation. In production, you would use:
-    - OpenSearch for full-text search
-    - Vector embeddings for semantic similarity
-    - ML-based matching models
-    """
-    # Try scanning with contains filter (simplified)
-    # In production, use proper search infrastructure
-    try:
-        # Get first word of item name for category-like matching
-        name_parts = item_name.split()
-        if not name_parts:
-            return None
-        
-        # Try to find by category or partial name
-        # This is a very simplified approach
-        response = products_table.scan(
-            FilterExpression="contains(#name, :partial)",
-            ExpressionAttributeNames={"#name": "name"},
-            ExpressionAttributeValues={":partial": name_parts[0]},
-            Limit=5
-        )
-        
-        if response.get("Items"):
-            # Return first match with reduced confidence
-            return {
-                "product": response["Items"][0],
-                "confidence": 0.7,  # Reduced confidence for fuzzy match
-            }
-        
-    except ClientError:
-        pass
-    
-    return None
 
 
 @tracer.capture_method
@@ -465,8 +529,32 @@ def record_handler(record: SQSRecord) -> Dict[str, Any]:
         # Match against product catalog
         matched_items = match_products(extraction_result.items)
         
-        # Calculate total
-        total_amount = sum(item.get("total_price", 0) for item in matched_items)
+        # Calculate pricing with tax and create itemized breakdown
+        pricing_calculator = get_pricing_calculator()
+        
+        # Add detailed pricing to matched items
+        matched_items_with_pricing = pricing_calculator.add_pricing_to_matched_items(
+            matched_items
+        )
+        
+        # Calculate order summary
+        order_summary = pricing_calculator.calculate_order_summary(
+            matched_items_with_pricing,
+            check_inventory=True
+        )
+        
+        # Get total amount
+        total_amount = float(order_summary.total_amount)
+        
+        logger.info(
+            "Pricing calculated",
+            extra={
+                "subtotal": float(order_summary.subtotal),
+                "total_tax": float(order_summary.total_tax),
+                "total_amount": total_amount,
+                "item_count": order_summary.item_count,
+            }
+        )
         
         # Update order in DynamoDB
         if ORDERS_TABLE_NAME and created_at:
@@ -474,19 +562,23 @@ def record_handler(record: SQSRecord) -> Dict[str, Any]:
                 order_id,
                 created_at,
                 extraction_result,
-                matched_items,
+                matched_items_with_pricing,
                 total_amount
             )
         
-        # Prepare payload for payment processor
+        # Prepare payload for payment processor with itemized breakdown
         payment_payload = {
             "order_id": order_id,
             "correlation_id": correlation_id,
             "customer_email": body.get("customer_email"),
             "customer_name": body.get("customer_name"),
             "created_at": created_at,
-            "matched_items": matched_items,
+            "matched_items": matched_items_with_pricing,
             "total_amount": total_amount,
+            "subtotal": float(order_summary.subtotal),
+            "total_tax": float(order_summary.total_tax),
+            "currency": order_summary.currency,
+            "itemized_breakdown": order_summary.to_dict(),
             "extraction_confidence": extraction_result.average_confidence,
             "has_uncertain_items": extraction_result.has_uncertain_items,
         }
@@ -505,8 +597,10 @@ def record_handler(record: SQSRecord) -> Dict[str, Any]:
             "Successfully matched products",
             extra={
                 "order_id": order_id,
+                "subtotal": float(order_summary.subtotal),
+                "total_tax": float(order_summary.total_tax),
                 "total": total_amount,
-                "items_matched": len([i for i in matched_items if i["match_type"] != "unmatched"]),
+                "items_matched": len([i for i in matched_items_with_pricing if i["match_type"] != "unmatched"]),
             }
         )
         
@@ -514,7 +608,7 @@ def record_handler(record: SQSRecord) -> Dict[str, Any]:
             "status": "success",
             "order_id": order_id,
             "items_extracted": extraction_result.total_items,
-            "items_matched": len(matched_items),
+            "items_matched": len(matched_items_with_pricing),
             "average_confidence": extraction_result.average_confidence,
         }
         
