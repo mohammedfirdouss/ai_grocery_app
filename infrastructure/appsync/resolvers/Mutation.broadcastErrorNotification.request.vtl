@@ -1,0 +1,15 @@
+## BroadcastErrorNotification Mutation - Request Mapping Template
+## Used by backend services to broadcast error notifications via IAM auth
+
+{
+    "version": "2018-05-29",
+    "payload": {
+        "orderId": $util.toJson($ctx.args.input.orderId),
+        "errorType": $util.toJson($ctx.args.input.errorType),
+        "errorMessage": $util.toJson($ctx.args.input.errorMessage),
+        "errorStage": $util.toJson($ctx.args.input.errorStage),
+        "correlationId": $util.toJson($ctx.args.input.correlationId),
+        "isRetryable": $util.toJson($ctx.args.input.isRetryable),
+        "timestamp": $util.toJson($ctx.args.input.timestamp)
+    }
+}

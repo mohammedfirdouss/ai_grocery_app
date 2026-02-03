@@ -66,6 +66,74 @@ input PaginationInput {
   nextToken: String
 }
 
+"""Input for publishing order update notifications (IAM auth for backend)"""
+input PublishOrderUpdateInput {
+  """Order ID"""
+  orderId: ID!
+  """New order status"""
+  status: ProcessingStatus!
+  """Customer email address"""
+  customerEmail: String!
+  """Correlation ID for tracing"""
+  correlationId: String!
+  """Event timestamp"""
+  timestamp: AWSDateTime!
+  """Additional data as JSON"""
+  data: AWSJSON
+}
+
+"""Input for publishing processing event notifications (IAM auth for backend)"""
+input PublishProcessingEventInput {
+  """Order ID"""
+  orderId: ID!
+  """Event type"""
+  eventType: String!
+  """Current processing status"""
+  status: ProcessingStatus!
+  """Human-readable message"""
+  message: String!
+  """Correlation ID for tracing"""
+  correlationId: String!
+  """Event timestamp"""
+  timestamp: AWSDateTime!
+  """Additional event data as JSON"""
+  data: AWSJSON
+}
+
+"""Input for publishing payment status notifications (IAM auth for backend)"""
+input PublishPaymentStatusInput {
+  """Order ID"""
+  orderId: ID!
+  """Payment status"""
+  status: PaymentStatus!
+  """PayStack payment URL"""
+  paymentUrl: String
+  """Payment amount"""
+  amount: Float
+  """Currency code"""
+  currency: String
+  """Event timestamp"""
+  timestamp: AWSDateTime!
+}
+
+"""Input for broadcasting error notifications (IAM auth for backend)"""
+input BroadcastErrorInput {
+  """Order ID"""
+  orderId: ID!
+  """Error type"""
+  errorType: String!
+  """Human-readable error message"""
+  errorMessage: String!
+  """Processing stage where error occurred"""
+  errorStage: String!
+  """Correlation ID for tracing"""
+  correlationId: String!
+  """Whether the operation can be retried"""
+  isRetryable: Boolean!
+  """Event timestamp"""
+  timestamp: AWSDateTime!
+}
+
 # ==============================================================================
 # TYPES
 # ==============================================================================
@@ -204,6 +272,66 @@ type OrderConnection {
   totalCount: Int
 }
 
+"""Response for publish order update mutation"""
+type PublishOrderUpdateResponse {
+  """Order ID"""
+  orderId: ID!
+  """Order status"""
+  status: ProcessingStatus!
+  """Timestamp of the update"""
+  timestamp: AWSDateTime!
+}
+
+"""Response for publish processing event mutation"""
+type PublishProcessingEventResponse {
+  """Order ID"""
+  orderId: ID!
+  """Event type"""
+  eventType: String!
+  """Current status"""
+  status: ProcessingStatus!
+  """Timestamp of the event"""
+  timestamp: AWSDateTime!
+}
+
+"""Response for publish payment status mutation"""
+type PublishPaymentStatusResponse {
+  """Order ID"""
+  orderId: ID!
+  """Payment status"""
+  status: PaymentStatus!
+  """Timestamp of the update"""
+  timestamp: AWSDateTime!
+}
+
+"""Response for broadcast error notification mutation"""
+type BroadcastErrorResponse {
+  """Order ID"""
+  orderId: ID!
+  """Error type"""
+  errorType: String!
+  """Timestamp of the error"""
+  timestamp: AWSDateTime!
+}
+
+"""Error notification type for real-time error broadcasting"""
+type ErrorNotification {
+  """Order ID"""
+  orderId: ID!
+  """Error type"""
+  errorType: String!
+  """Human-readable error message"""
+  errorMessage: String!
+  """Processing stage where error occurred"""
+  errorStage: String!
+  """Correlation ID for tracing"""
+  correlationId: String!
+  """Whether the operation can be retried"""
+  isRetryable: Boolean!
+  """Event timestamp"""
+  timestamp: AWSDateTime!
+}
+
 # ==============================================================================
 # QUERIES
 # ==============================================================================
@@ -260,6 +388,34 @@ type Mutation {
   """
   cancelOrder(orderId: ID!): Order
     @aws_cognito_user_pools
+
+  """
+  Publish order update notification (IAM auth for backend services)
+  Used by Event Handler Lambda to push real-time updates
+  """
+  publishOrderUpdate(input: PublishOrderUpdateInput!): PublishOrderUpdateResponse!
+    @aws_iam
+
+  """
+  Publish processing event notification (IAM auth for backend services)
+  Used by Event Handler Lambda to push detailed processing updates
+  """
+  publishProcessingEvent(input: PublishProcessingEventInput!): PublishProcessingEventResponse!
+    @aws_iam
+
+  """
+  Publish payment status notification (IAM auth for backend services)
+  Used by Event Handler Lambda to push payment updates
+  """
+  publishPaymentStatus(input: PublishPaymentStatusInput!): PublishPaymentStatusResponse!
+    @aws_iam
+
+  """
+  Broadcast error notification (IAM auth for backend services)
+  Used by Event Handler Lambda to push error notifications
+  """
+  broadcastErrorNotification(input: BroadcastErrorInput!): BroadcastErrorResponse!
+    @aws_iam
 }
 
 # ==============================================================================
@@ -271,26 +427,38 @@ type Subscription {
   Subscribe to order status changes for a specific order
   Requires authentication
   Filter by orderId to receive updates for a specific order
+  Triggered by both user mutations and backend publish mutations
   """
   onOrderStatusChanged(orderId: ID!): Order
-    @aws_subscribe(mutations: ["submitGroceryList", "cancelOrder"])
+    @aws_subscribe(mutations: ["submitGroceryList", "cancelOrder", "publishOrderUpdate"])
     @aws_cognito_user_pools
 
   """
   Subscribe to processing events for real-time updates
   Requires authentication
   Provides detailed processing updates as the order progresses
+  Triggered by backend publish mutations via EventBridge
   """
   onProcessingEvent(orderId: ID!): ProcessingEvent
-    @aws_subscribe(mutations: ["submitGroceryList"])
+    @aws_subscribe(mutations: ["submitGroceryList", "publishProcessingEvent"])
     @aws_cognito_user_pools
 
   """
   Subscribe to payment status updates for an order
   Requires authentication
+  Triggered by backend publish mutations via EventBridge
   """
   onPaymentStatusChanged(orderId: ID!): PaymentLink
-    @aws_subscribe(mutations: ["submitGroceryList"])
+    @aws_subscribe(mutations: ["submitGroceryList", "publishPaymentStatus"])
+    @aws_cognito_user_pools
+
+  """
+  Subscribe to error notifications for an order
+  Requires authentication
+  Receives error notifications when processing fails
+  """
+  onErrorNotification(orderId: ID!): ErrorNotification
+    @aws_subscribe(mutations: ["broadcastErrorNotification"])
     @aws_cognito_user_pools
 }
 
