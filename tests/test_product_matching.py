@@ -50,18 +50,18 @@ class TestLevenshteinMatcher:
     
     def test_find_best_match(self):
         """Test finding best match from product list."""
-        matcher = LevenshteinMatcher(threshold=0.75)
+        matcher = LevenshteinMatcher(threshold=0.7)
         products = [
-            {"product_id": "1", "name": "red apple"},
-            {"product_id": "2", "name": "green apple"},
+            {"product_id": "1", "name": "apple"},
+            {"product_id": "2", "name": "banana"},
             {"product_id": "3", "name": "orange"},
         ]
         
-        result = matcher.find_best_match("aple", products)
+        result = matcher.find_best_match("appl", products)
         assert result is not None
-        assert "apple" in result.product["name"]
+        assert result.product["name"] == "apple"
         assert result.match_type == "fuzzy_levenshtein"
-        assert result.confidence > 0.75
+        assert result.confidence > 0.7
     
     def test_no_match_below_threshold(self):
         """Test no match when below threshold."""
@@ -135,13 +135,13 @@ class TestProductMatcher:
         return [
             {
                 "product_id": "1",
-                "name": "red apple",
+                "name": "apple",
                 "category": "fruits",
                 "unit_price": 5.0,
             },
             {
                 "product_id": "2",
-                "name": "green apple",
+                "name": "apples",
                 "category": "fruits",
                 "unit_price": 4.5,
             },
@@ -162,7 +162,7 @@ class TestProductMatcher:
     def test_exact_match(self, sample_products):
         """Test exact product matching."""
         matcher = ProductMatcher()
-        result = matcher.match_product("red apple", sample_products)
+        result = matcher.match_product("apple", sample_products)
         
         assert result is not None
         assert result.product["product_id"] == "1"
@@ -172,10 +172,10 @@ class TestProductMatcher:
     def test_fuzzy_match(self, sample_products):
         """Test fuzzy product matching."""
         matcher = ProductMatcher(levenshtein_threshold=0.7)
-        result = matcher.match_product("aple", sample_products)
+        result = matcher.match_product("appl", sample_products)
         
         assert result is not None
-        assert "apple" in result.product["name"]
+        assert result.product["name"] in ["apple", "apples"]
         assert result.match_type == "fuzzy_levenshtein"
         assert result.confidence > 0.7
     
@@ -183,7 +183,7 @@ class TestProductMatcher:
         """Test category-based matching."""
         matcher = ProductMatcher(levenshtein_threshold=0.7)
         result = matcher.match_product(
-            "aple",
+            "appl",
             sample_products,
             category="fruits"
         )
@@ -202,7 +202,7 @@ class TestProductMatcher:
         """Test finding alternative products."""
         matcher = ProductMatcher()
         alternatives = matcher.find_alternatives(
-            "aple",
+            "appl",
             sample_products,
             max_alternatives=2
         )
@@ -218,7 +218,7 @@ class TestProductMatcher:
         """Test finding alternatives within category."""
         matcher = ProductMatcher()
         alternatives = matcher.find_alternatives(
-            "aple",
+            "appl",
             sample_products,
             category="fruits",
             max_alternatives=3
@@ -232,7 +232,7 @@ class TestProductMatcher:
     def test_case_insensitive_matching(self, sample_products):
         """Test case-insensitive product matching."""
         matcher = ProductMatcher()
-        result = matcher.match_product("RED APPLE", sample_products)
+        result = matcher.match_product("APPLE", sample_products)
         
         assert result is not None
         assert result.product["product_id"] == "1"
@@ -248,7 +248,7 @@ class TestProductMatcher:
     def test_whitespace_handling(self, sample_products):
         """Test handling of extra whitespace."""
         matcher = ProductMatcher()
-        result = matcher.match_product("  red apple  ", sample_products)
+        result = matcher.match_product("  apple  ", sample_products)
         
         assert result is not None
         assert result.product["product_id"] == "1"

@@ -234,7 +234,7 @@ class TestPricingCalculator:
         
         assert summary.item_count == 2
         assert summary.subtotal == Decimal("80.00")  # (10*2) + (20*3)
-        assert summary.tax_amount == Decimal("6.00")  # 7.5% of 80
+        assert summary.total_tax == Decimal("6.00")  # 7.5% of 80
         assert summary.total_amount == Decimal("86.00")
     
     def test_calculate_order_summary_mixed_tax(self, calculator):
@@ -261,7 +261,7 @@ class TestPricingCalculator:
         summary = calculator.calculate_order_summary(matched_items)
         
         assert summary.subtotal == Decimal("40.00")  # 20 + 20
-        assert summary.tax_amount == Decimal("1.50")  # Only 7.5% on the 20
+        assert summary.total_tax == Decimal("1.50")  # Only 7.5% on the 20
         assert summary.total_amount == Decimal("41.50")
     
     def test_calculate_order_summary_skip_unmatched(self, calculator):
