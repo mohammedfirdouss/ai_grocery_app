@@ -51,6 +51,8 @@ class EnvironmentConfig:
     # Monitoring settings
     enable_xray_tracing: bool
     log_retention_days: int
+    alarm_email: Optional[str] = None
+    monthly_budget_limit: float = 100.0
     
     @classmethod
     def get_config(cls, environment: str) -> "EnvironmentConfig":
@@ -106,7 +108,9 @@ class EnvironmentConfig:
             
             # Monitoring - Detailed for debugging
             enable_xray_tracing=True,
-            log_retention_days=7
+            log_retention_days=7,
+            alarm_email=None,
+            monthly_budget_limit=50.0
         )
     
     @classmethod
@@ -149,7 +153,9 @@ class EnvironmentConfig:
             
             # Monitoring - Balanced
             enable_xray_tracing=True,
-            log_retention_days=30
+            log_retention_days=30,
+            alarm_email=None,
+            monthly_budget_limit=200.0
         )
     
     @classmethod
@@ -192,7 +198,9 @@ class EnvironmentConfig:
             
             # Monitoring - Essential only
             enable_xray_tracing=True,
-            log_retention_days=90
+            log_retention_days=90,
+            alarm_email=None,
+            monthly_budget_limit=1000.0
         )
     
     def to_dict(self) -> Dict[str, Any]:
