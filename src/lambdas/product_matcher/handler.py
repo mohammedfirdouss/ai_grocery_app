@@ -61,6 +61,12 @@ BEDROCK_MAX_TOKENS = int(os.environ.get("BEDROCK_MAX_TOKENS", "4096"))
 BEDROCK_TEMPERATURE = float(os.environ.get("BEDROCK_TEMPERATURE", "0.1"))
 UNCERTAINTY_THRESHOLD = float(os.environ.get("BEDROCK_UNCERTAINTY_THRESHOLD", "0.7"))
 
+# Match type constants for metrics
+MATCH_TYPE_EXACT = "exact"
+MATCH_TYPE_FUZZY = {"fuzzy_levenshtein", "category_levenshtein"}
+MATCH_TYPE_EMBEDDING = {"category_embedding"}
+MATCH_TYPE_UNMATCHED = "unmatched"
+
 # Initialize batch processor
 processor = BatchProcessor(event_type=EventType.SQS)
 
@@ -376,13 +382,13 @@ def match_products(
             )
     
     # Emit matching metrics
-    matched_count = sum(1 for item in matched_items if item["match_type"] != "unmatched")
+    matched_count = sum(1 for item in matched_items if item["match_type"] != MATCH_TYPE_UNMATCHED)
     unmatched_count = len(matched_items) - matched_count
     
-    # Count by match type
-    exact_matches = sum(1 for item in matched_items if item["match_type"] == "exact")
-    fuzzy_matches = sum(1 for item in matched_items if "fuzzy" in item["match_type"] or "levenshtein" in item["match_type"])
-    embedding_matches = sum(1 for item in matched_items if "embedding" in item["match_type"])
+    # Count by match type using constants
+    exact_matches = sum(1 for item in matched_items if item["match_type"] == MATCH_TYPE_EXACT)
+    fuzzy_matches = sum(1 for item in matched_items if item["match_type"] in MATCH_TYPE_FUZZY)
+    embedding_matches = sum(1 for item in matched_items if item["match_type"] in MATCH_TYPE_EMBEDDING)
     
     metrics.add_metric(
         name="ProductsMatched",

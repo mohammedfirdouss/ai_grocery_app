@@ -8,7 +8,7 @@ This module handles:
 - Itemized breakdown generation
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from aws_lambda_powertools import Logger
@@ -134,7 +134,7 @@ class TaxCalculator:
         self,
         product: Dict[str, Any],
         quantity: float
-    ) -> tuple[Decimal, Decimal]:
+    ) -> Tuple[Decimal, Decimal]:
         """
         Calculate tax for an item.
         
@@ -195,7 +195,7 @@ class InventoryChecker:
         self,
         product: Dict[str, Any],
         requested_quantity: float
-    ) -> tuple[bool, Optional[float]]:
+    ) -> Tuple[bool, Optional[float]]:
         """
         Check if sufficient stock is available.
         
