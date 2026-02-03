@@ -453,6 +453,7 @@ class AiGroceryStack(Stack):
             environment={
                 **common_env,
                 "PAYSTACK_BASE_URL": self.config.paystack_base_url,
+                "PAYMENT_EXPIRATION_HOURS": "24",
             },
             tracing=lambda_.Tracing.ACTIVE if self.config.enable_xray_tracing else lambda_.Tracing.DISABLED,
         )
@@ -465,6 +466,23 @@ class AiGroceryStack(Stack):
                 max_batching_window=Duration.seconds(0),
                 report_batch_item_failures=True,
             )
+        )
+        
+        # Payment Webhook Handler Lambda Function (for PayStack webhooks)
+        self.payment_webhook_function = lambda_.Function(
+            self,
+            "PaymentWebhookFunction",
+            function_name=f"ai-grocery-payment-webhook-{self.env_name}",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            handler="handler.lambda_handler",
+            code=lambda_.Code.from_asset("src/lambdas/payment_webhook"),
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            reserved_concurrent_executions=self.config.lambda_reserved_concurrency,
+            role=self.lambda_execution_role,
+            layers=[self.shared_layer],
+            environment=common_env,
+            tracing=lambda_.Tracing.ACTIVE if self.config.enable_xray_tracing else lambda_.Tracing.DISABLED,
         )
         
         # Event Handler Lambda Function (for EventBridge events)
@@ -596,6 +614,7 @@ class AiGroceryStack(Stack):
             self.text_parser_function,
             self.product_matcher_function,
             self.payment_processor_function,
+            self.payment_webhook_function,
             self.event_handler_function
         ]:
             self.orders_table.grant_read_write_data(func)
@@ -605,6 +624,7 @@ class AiGroceryStack(Stack):
         
         # Grant Secrets Manager access
         self.paystack_secret.grant_read(self.payment_processor_function)
+        self.paystack_secret.grant_read(self.payment_webhook_function)
         self.bedrock_secret.grant_read(self.product_matcher_function)
     
     def _create_eventbridge_infrastructure(self) -> None:
@@ -972,6 +992,16 @@ class AiGroceryStack(Stack):
             self,
             "PaymentProcessorLogGroup",
             log_group_name=f"/aws/lambda/ai-grocery-payment-processor-{self.env_name}",
+            retention=retention,
+            encryption_key=self.kms_key,
+            removal_policy=RemovalPolicy.DESTROY
+        )
+        
+        # Log group for payment webhook Lambda
+        logs.LogGroup(
+            self,
+            "PaymentWebhookLogGroup",
+            log_group_name=f"/aws/lambda/ai-grocery-payment-webhook-{self.env_name}",
             retention=retention,
             encryption_key=self.kms_key,
             removal_policy=RemovalPolicy.DESTROY
