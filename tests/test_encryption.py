@@ -222,3 +222,202 @@ class TestEncryptionHelper:
         
         with pytest.raises(ValueError, match="KMS key ID is not configured"):
             helper.encrypt("test plaintext")
+    
+    @patch('models.encryption.boto3.client')
+    def test_encrypt_with_context(self, mock_boto_client):
+        """Test encryption with encryption context."""
+        # Setup mock
+        mock_kms = MagicMock()
+        mock_kms.encrypt.return_value = {
+            "CiphertextBlob": b"encrypted_data"
+        }
+        mock_boto_client.return_value = mock_kms
+        
+        # Test
+        helper = EncryptionHelper(kms_key_id="test-key-id")
+        context = {"resource_type": "order", "resource_id": "order-123"}
+        result = helper.encrypt("test plaintext", encryption_context=context)
+        
+        # Verify
+        assert result == base64.b64encode(b"encrypted_data").decode("utf-8")
+        call_args = mock_kms.encrypt.call_args
+        assert "EncryptionContext" in call_args.kwargs
+        assert call_args.kwargs["EncryptionContext"] == context
+    
+    @patch('models.encryption.boto3.client')
+    def test_decrypt_with_context(self, mock_boto_client):
+        """Test decryption with encryption context."""
+        # Setup mock
+        mock_kms = MagicMock()
+        mock_kms.decrypt.return_value = {
+            "Plaintext": b"decrypted_text"
+        }
+        mock_boto_client.return_value = mock_kms
+        
+        # Test
+        helper = EncryptionHelper(kms_key_id="test-key-id")
+        ciphertext = base64.b64encode(b"encrypted_data").decode("utf-8")
+        context = {"resource_type": "order", "resource_id": "order-123"}
+        result = helper.decrypt(ciphertext, encryption_context=context)
+        
+        # Verify
+        assert result == "decrypted_text"
+        call_args = mock_kms.decrypt.call_args
+        assert "EncryptionContext" in call_args.kwargs
+        assert call_args.kwargs["EncryptionContext"] == context
+    
+    @patch('models.encryption.boto3.client')
+    def test_validate_key_success(self, mock_boto_client):
+        """Test key validation with valid key."""
+        from models.encryption import EncryptionValidationError
+        
+        # Setup mock
+        mock_kms = MagicMock()
+        mock_kms.describe_key.return_value = {
+            "KeyMetadata": {
+                "KeyState": "Enabled",
+                "KeyUsage": "ENCRYPT_DECRYPT",
+                "KeyRotationEnabled": True
+            }
+        }
+        mock_boto_client.return_value = mock_kms
+        
+        # Test
+        helper = EncryptionHelper(kms_key_id="test-key-id")
+        assert helper.validate_key() is True
+    
+    @patch('models.encryption.boto3.client')
+    def test_validate_key_disabled(self, mock_boto_client):
+        """Test key validation with disabled key."""
+        from models.encryption import EncryptionValidationError
+        
+        # Setup mock
+        mock_kms = MagicMock()
+        mock_kms.describe_key.return_value = {
+            "KeyMetadata": {
+                "KeyState": "Disabled",
+                "KeyUsage": "ENCRYPT_DECRYPT"
+            }
+        }
+        mock_boto_client.return_value = mock_kms
+        
+        # Test
+        helper = EncryptionHelper(kms_key_id="test-key-id")
+        with pytest.raises(EncryptionValidationError, match="not enabled"):
+            helper.validate_key()
+    
+    @patch('models.encryption.boto3.client')
+    def test_get_key_rotation_status(self, mock_boto_client):
+        """Test getting key rotation status."""
+        # Setup mock
+        mock_kms = MagicMock()
+        mock_kms.get_key_rotation_status.return_value = {
+            "KeyRotationEnabled": True
+        }
+        mock_boto_client.return_value = mock_kms
+        
+        # Test
+        helper = EncryptionHelper(kms_key_id="test-key-id")
+        assert helper.get_key_rotation_status() is True
+
+
+class TestEncryptionValidation:
+    """Tests for encryption validation functions."""
+    
+    def test_mask_key_id_basic(self):
+        """Test basic key ID masking."""
+        from models.encryption import mask_key_id
+        
+        result = mask_key_id("1234567890abcdef")
+        assert result == "1234********cdef"
+    
+    def test_mask_key_id_empty(self):
+        """Test masking empty key ID."""
+        from models.encryption import mask_key_id
+        
+        result = mask_key_id("")
+        assert result == "[NONE]"
+    
+    def test_mask_key_id_short(self):
+        """Test masking short key ID."""
+        from models.encryption import mask_key_id
+        
+        result = mask_key_id("1234")
+        assert result == "****"
+    
+    def test_validate_encrypted_field_valid(self):
+        """Test validating a valid encrypted field."""
+        from models.encryption import validate_encrypted_field
+        
+        # Create a fake ciphertext that's base64 encoded and long enough
+        fake_ciphertext = base64.b64encode(b"x" * 50).decode("utf-8")
+        assert validate_encrypted_field(fake_ciphertext) is True
+    
+    def test_validate_encrypted_field_invalid_base64(self):
+        """Test validating an invalid base64 string."""
+        from models.encryption import validate_encrypted_field
+        
+        assert validate_encrypted_field("not-valid-base64!!!") is False
+    
+    def test_validate_encrypted_field_too_short(self):
+        """Test validating ciphertext that's too short."""
+        from models.encryption import validate_encrypted_field
+        
+        short_ciphertext = base64.b64encode(b"short").decode("utf-8")
+        assert validate_encrypted_field(short_ciphertext) is False
+    
+    def test_validate_encrypted_field_empty(self):
+        """Test validating empty string."""
+        from models.encryption import validate_encrypted_field
+        
+        assert validate_encrypted_field("") is False
+        assert validate_encrypted_field(None) is False  # type: ignore
+    
+    def test_create_encryption_context(self):
+        """Test creating encryption context."""
+        from models.encryption import create_encryption_context
+        
+        context = create_encryption_context(
+            resource_type="order",
+            resource_id="order-123",
+            purpose="storage"
+        )
+        
+        assert context["resource_type"] == "order"
+        assert context["resource_id"] == "order-123"
+        assert context["purpose"] == "storage"
+        assert context["service"] == "ai-grocery-app"
+    
+    def test_require_encryption_decorator_with_key(self):
+        """Test require_encryption decorator when key is present."""
+        import os
+        from models.encryption import require_encryption
+        
+        os.environ["KMS_KEY_ID"] = "test-key-id"
+        try:
+            @require_encryption
+            def protected_operation(data: str) -> str:
+                return data
+            
+            result = protected_operation("test")
+            assert result == "test"
+        finally:
+            del os.environ["KMS_KEY_ID"]
+    
+    def test_require_encryption_decorator_without_key(self):
+        """Test require_encryption decorator when key is missing."""
+        import os
+        from models.encryption import require_encryption, EncryptionValidationError
+        
+        # Ensure env var is not set
+        original = os.environ.pop("KMS_KEY_ID", None)
+        try:
+            @require_encryption
+            def protected_operation(data: str) -> str:
+                return data
+            
+            with pytest.raises(EncryptionValidationError, match="Encryption not configured"):
+                protected_operation("test")
+        finally:
+            if original:
+                os.environ["KMS_KEY_ID"] = original

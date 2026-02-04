@@ -31,6 +31,7 @@ import os
 
 from infrastructure.config.environment_config import EnvironmentConfig
 from infrastructure.monitoring.monitoring_construct import MonitoringConstruct
+from infrastructure.security import SecurityConstruct, ThrottlingConfig
 
 
 class AiGroceryStack(Stack):
@@ -1452,4 +1453,14 @@ class AiGroceryStack(Stack):
             dynamodb_tables=dynamodb_tables,
             alarm_email=self.config.alarm_email,
             monthly_budget_limit=self.config.monthly_budget_limit
+        )
+        
+        # Create security infrastructure (WAF for AppSync API)
+        throttling_config = ThrottlingConfig.get_config(self.env_name)
+        self.security = SecurityConstruct(
+            self,
+            "Security",
+            env_name=self.env_name,
+            appsync_api_arn=self.graphql_api.arn,
+            rate_limit_requests=throttling_config["rate_limit_requests"]
         )
