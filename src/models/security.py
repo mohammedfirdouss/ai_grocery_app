@@ -58,11 +58,18 @@ EMAIL_PATTERN: Pattern = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z
 UUID_PATTERN: Pattern = re.compile(r'^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$')
 PHONE_PATTERN: Pattern = re.compile(r'^\+?[1-9]\d{1,14}$')
 
-# SQL/NoSQL injection patterns to detect
+# SQL/NoSQL injection patterns to detect - designed to reduce false positives
 INJECTION_PATTERNS: List[Pattern] = [
-    re.compile(r'[\'";\-\-]', re.IGNORECASE),  # Basic SQL injection
-    re.compile(r'\$where|\$regex|\$ne|\$gt|\$lt', re.IGNORECASE),  # MongoDB injection
-    re.compile(r'<script|javascript:|data:', re.IGNORECASE),  # XSS patterns
+    # SQL injection patterns - look for actual injection indicators, not just quotes
+    re.compile(r"'\s*(OR|AND)\s+'[^']*'\s*=\s*'", re.IGNORECASE),  # ' OR '1'='1
+    re.compile(r";\s*(DROP|DELETE|UPDATE|INSERT|SELECT)\s+", re.IGNORECASE),  # ; DROP TABLE
+    re.compile(r"--\s*$", re.MULTILINE),  # SQL comment at end of line
+    re.compile(r"UNION\s+(ALL\s+)?SELECT", re.IGNORECASE),  # UNION SELECT injection
+    # MongoDB/NoSQL injection patterns
+    re.compile(r'\$where|\$regex|\$ne|\$gt|\$lt|\$or|\$and', re.IGNORECASE),
+    # XSS patterns
+    re.compile(r'<script|javascript:|data:\s*text/html', re.IGNORECASE),
+    re.compile(r'on(load|error|click|mouseover)\s*=', re.IGNORECASE),  # Event handlers
 ]
 
 # Characters that are potentially dangerous in various contexts
@@ -423,6 +430,23 @@ class SecurityEventType(str, Enum):
     SYSTEM_ERROR = "system_error"
 
 
+def mask_key_id(key_id: str) -> str:
+    """
+    Mask a KMS key ID for logging purposes.
+    
+    Args:
+        key_id: The KMS key ID to mask.
+        
+    Returns:
+        Masked key ID showing only first and last 4 characters.
+    """
+    if not key_id:
+        return "[NONE]"
+    if len(key_id) <= 8:
+        return "*" * len(key_id)
+    return key_id[:4] + "*" * (len(key_id) - 8) + key_id[-4:]
+
+
 class SecurityEvent(BaseModel):
     """Model for security audit events."""
     
@@ -709,15 +733,6 @@ class AuditLogger:
             correlation_id=correlation_id,
             details={"key_id": mask_key_id(key_id)}
         )
-
-
-def mask_key_id(key_id: str) -> str:
-    """Mask a KMS key ID for logging purposes."""
-    if not key_id:
-        return "[NONE]"
-    if len(key_id) <= 8:
-        return "*" * len(key_id)
-    return key_id[:4] + "*" * (len(key_id) - 8) + key_id[-4:]
 
 
 # ==============================================================================

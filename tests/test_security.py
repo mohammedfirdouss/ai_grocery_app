@@ -139,22 +139,53 @@ class TestInputValidation:
     
     def test_detect_injection_sql(self):
         """Test detection of SQL injection patterns."""
-        patterns = detect_injection_patterns("'; DROP TABLE users; --")
+        # Test SQL injection with UNION SELECT
+        patterns = detect_injection_patterns("1 UNION SELECT * FROM users --")
+        assert len(patterns) > 0
+        
+        # Test SQL injection with OR condition
+        patterns = detect_injection_patterns("' OR '1'='1")
+        assert len(patterns) > 0
+        
+        # Test SQL injection with DROP
+        patterns = detect_injection_patterns("; DROP TABLE users;")
         assert len(patterns) > 0
     
     def test_detect_injection_nosql(self):
         """Test detection of NoSQL injection patterns."""
         patterns = detect_injection_patterns('{"$where": "this.password == 1"}')
         assert len(patterns) > 0
+        
+        # Test $or injection
+        patterns = detect_injection_patterns('{"$or": [{"a": 1}, {"b": 2}]}')
+        assert len(patterns) > 0
     
     def test_detect_injection_xss(self):
         """Test detection of XSS patterns."""
         patterns = detect_injection_patterns("<script>alert('xss')</script>")
         assert len(patterns) > 0
+        
+        # Test event handler XSS
+        patterns = detect_injection_patterns('<img src="x" onerror="alert(1)">')
+        assert len(patterns) > 0
     
     def test_detect_injection_clean(self):
         """Test that clean strings don't trigger detection."""
         patterns = detect_injection_patterns("Hello, this is a normal string!")
+        assert len(patterns) == 0
+    
+    def test_detect_injection_no_false_positives(self):
+        """Test that normal strings with apostrophes don't trigger false positives."""
+        # Names with apostrophes should be allowed
+        patterns = detect_injection_patterns("O'Brien")
+        assert len(patterns) == 0
+        
+        # Contractions should be allowed
+        patterns = detect_injection_patterns("It's a beautiful day!")
+        assert len(patterns) == 0
+        
+        # Grocery list with common characters should be allowed
+        patterns = detect_injection_patterns("I need 2 bunches of bananas; please add milk too.")
         assert len(patterns) == 0
 
 

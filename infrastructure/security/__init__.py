@@ -36,6 +36,7 @@ class SecurityConstruct(Construct):
         env_name: str,
         appsync_api_arn: str,
         rate_limit_requests: int = 2000,
+        max_request_body_size: int = 262144,  # 256KB default
         block_by_country: Optional[List[str]] = None,
         **kwargs
     ) -> None:
@@ -48,12 +49,14 @@ class SecurityConstruct(Construct):
             env_name: Environment name (dev, staging, production).
             appsync_api_arn: ARN of the AppSync API to protect.
             rate_limit_requests: Number of requests per 5-minute window per IP.
+            max_request_body_size: Maximum request body size in bytes (default: 256KB).
             block_by_country: Optional list of country codes to block.
         """
         super().__init__(scope, construct_id, **kwargs)
         
         self.env_name = env_name
         self.appsync_api_arn = appsync_api_arn
+        self.max_request_body_size = max_request_body_size
         
         # Create WAF WebACL
         self.web_acl = self._create_web_acl(rate_limit_requests, block_by_country)
@@ -206,7 +209,7 @@ class SecurityConstruct(Construct):
                             )
                         ),
                         comparison_operator="GT",
-                        size=65536,  # 64KB max request body
+                        size=self.max_request_body_size,  # Configurable max request body
                         text_transformations=[
                             wafv2.CfnWebACL.TextTransformationProperty(
                                 priority=0,
@@ -294,14 +297,17 @@ class ThrottlingConfig:
         "dev": {
             "rate_limit_requests": 1000,  # Lower for development
             "burst_limit": 50,
+            "max_request_body_size": 131072,  # 128KB for dev
         },
         "staging": {
             "rate_limit_requests": 2000,
             "burst_limit": 100,
+            "max_request_body_size": 262144,  # 256KB for staging
         },
         "production": {
             "rate_limit_requests": 5000,
             "burst_limit": 500,
+            "max_request_body_size": 524288,  # 512KB for production
         }
     }
     

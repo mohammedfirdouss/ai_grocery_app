@@ -1462,5 +1462,6 @@ class AiGroceryStack(Stack):
             "Security",
             env_name=self.env_name,
             appsync_api_arn=self.graphql_api.arn,
-            rate_limit_requests=throttling_config["rate_limit_requests"]
+            rate_limit_requests=throttling_config["rate_limit_requests"],
+            max_request_body_size=throttling_config["max_request_body_size"]
         )
