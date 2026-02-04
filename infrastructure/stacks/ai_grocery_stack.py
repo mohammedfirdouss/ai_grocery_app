@@ -1420,6 +1420,7 @@ class AiGroceryStack(Stack):
             "text-parser": self.text_parser_function,
             "product-matcher": self.product_matcher_function,
             "payment-processor": self.payment_processor_function,
+            "payment-webhook": self.payment_webhook_function,
             "event-handler": self.event_handler_function,
         }
         
