@@ -1,6 +1,3 @@
-# AI Grocery App
-
-A serverless AI-powered grocery ordering application built with AWS services.
 
 ## Overview
 
