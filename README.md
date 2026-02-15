@@ -77,25 +77,6 @@ python -m pytest tests/test_monitoring.py -v
 
 ## Development
 
-### Project Structure
-
-```
-.
-├── infrastructure/          # CDK infrastructure code
-│   ├── stacks/             # CDK stack definitions
-│   ├── monitoring/         # Monitoring constructs
-│   ├── config/             # Environment configurations
-│   └── appsync/            # AppSync resolvers
-├── src/                    # Application source code
-│   ├── lambdas/            # Lambda function handlers
-│   ├── bedrock/            # Bedrock integration
-│   ├── paystack/           # PayStack client
-│   └── models/             # Data models
-├── tests/                  # Unit and integration tests
-├── docs/                   # Documentation
-└── lambda_layers/          # Lambda layer dependencies
-```
-
 ### Environment Configuration
 
 The application supports three environments: dev, staging, and production.
@@ -132,13 +113,6 @@ The application implements security best practices:
 - Input validation and sanitization
 - Secure secrets management (Secrets Manager)
 - PayStack webhook signature verification
-
-## Contributing
-
-1. Create a feature branch
-2. Make changes with tests
-3. Run tests and linting
-4. Submit a pull request
 
 ## License
 
