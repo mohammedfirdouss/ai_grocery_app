@@ -645,19 +645,19 @@ class MonitoringConstruct(Construct):
             resources=["*"],
             conditions={
                 "StringEquals": {
-                    "cloudwatch:namespace": f"AiGroceryApp/{self.env_name}"
+                    "cloudwatch:namespace": "AIGroceryApp"
                 }
             }
         ))
         
-        # Create the health check Lambda function
+        # Create the health check Lambda function using external handler
         health_check_function = lambda_.Function(
             self,
             "HealthCheckFunction",
             function_name=f"ai-grocery-health-check-{self.env_name}",
             runtime=lambda_.Runtime.PYTHON_3_11,
-            handler="index.handler",
-            code=lambda_.Code.from_inline(self._get_health_check_code()),
+            handler="handler.lambda_handler",
+            code=lambda_.Code.from_asset("src/lambdas/health_check"),
             timeout=Duration.seconds(30),
             memory_size=256,
             role=health_check_role,
@@ -688,154 +688,3 @@ class MonitoringConstruct(Construct):
         )
         
         return health_check_function
-    
-    def _get_health_check_code(self) -> str:
-        """Return inline Python code for health check Lambda."""
-        return '''
-import json
-import os
-import boto3
-from datetime import datetime
-
-dynamodb_client = boto3.client("dynamodb")
-sqs_client = boto3.client("sqs")
-lambda_client = boto3.client("lambda")
-cloudwatch_client = boto3.client("cloudwatch")
-
-
-def check_dynamodb_tables(table_names):
-    """Check health of DynamoDB tables."""
-    results = {}
-    for table_name in table_names:
-        if not table_name:
-            continue
-        try:
-            response = dynamodb_client.describe_table(TableName=table_name)
-            status = response["Table"]["TableStatus"]
-            results[table_name] = {
-                "status": "healthy" if status == "ACTIVE" else "unhealthy",
-                "table_status": status,
-                "item_count": response["Table"].get("ItemCount", 0)
-            }
-        except Exception as e:
-            results[table_name] = {
-                "status": "unhealthy",
-                "error": str(e)
-            }
-    return results
-
-
-def check_sqs_queues(queue_urls):
-    """Check health of SQS queues."""
-    results = {}
-    for queue_url in queue_urls:
-        if not queue_url:
-            continue
-        try:
-            queue_name = queue_url.split("/")[-1]
-            response = sqs_client.get_queue_attributes(
-                QueueUrl=queue_url,
-                AttributeNames=["All"]
-            )
-            attrs = response.get("Attributes", {})
-            results[queue_name] = {
-                "status": "healthy",
-                "messages_available": int(attrs.get("ApproximateNumberOfMessagesVisible", 0)),
-                "messages_in_flight": int(attrs.get("ApproximateNumberOfMessagesNotVisible", 0)),
-                "messages_delayed": int(attrs.get("ApproximateNumberOfMessagesDelayed", 0))
-            }
-        except Exception as e:
-            results[queue_url.split("/")[-1] if queue_url else "unknown"] = {
-                "status": "unhealthy",
-                "error": str(e)
-            }
-    return results
-
-
-def check_lambda_functions(function_names):
-    """Check health of Lambda functions."""
-    results = {}
-    for function_name in function_names:
-        if not function_name:
-            continue
-        try:
-            response = lambda_client.get_function(FunctionName=function_name)
-            state = response["Configuration"]["State"]
-            results[function_name] = {
-                "status": "healthy" if state == "Active" else "unhealthy",
-                "state": state,
-                "runtime": response["Configuration"]["Runtime"],
-                "memory_size": response["Configuration"]["MemorySize"],
-                "timeout": response["Configuration"]["Timeout"],
-                "last_modified": response["Configuration"]["LastModified"]
-            }
-        except Exception as e:
-            results[function_name] = {
-                "status": "unhealthy",
-                "error": str(e)
-            }
-    return results
-
-
-def handler(event, context):
-    """Main health check handler."""
-    environment = os.environ.get("ENVIRONMENT", "unknown")
-    
-    # Get resource lists from environment
-    dynamodb_tables = [t for t in os.environ.get("DYNAMODB_TABLES", "").split(",") if t]
-    sqs_queues = [q for q in os.environ.get("SQS_QUEUES", "").split(",") if q]
-    lambda_functions = [f for f in os.environ.get("LAMBDA_FUNCTIONS", "").split(",") if f]
-    
-    # Perform health checks
-    health_status = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "environment": environment,
-        "overall_status": "healthy",
-        "components": {
-            "dynamodb": check_dynamodb_tables(dynamodb_tables),
-            "sqs": check_sqs_queues(sqs_queues),
-            "lambda": check_lambda_functions(lambda_functions)
-        }
-    }
-    
-    # Determine overall status
-    for component_type, components in health_status["components"].items():
-        for component_name, component_status in components.items():
-            if component_status.get("status") == "unhealthy":
-                health_status["overall_status"] = "unhealthy"
-                break
-        if health_status["overall_status"] == "unhealthy":
-            break
-    
-    # Log health status
-    print(json.dumps(health_status))
-    
-    # Emit custom metric for health status
-    try:
-        cloudwatch_client.put_metric_data(
-            Namespace=f"AiGroceryApp/{environment}",
-            MetricData=[
-                {
-                    "MetricName": "HealthCheckStatus",
-                    "Value": 1 if health_status["overall_status"] == "healthy" else 0,
-                    "Unit": "Count",
-                    "Dimensions": [
-                        {
-                            "Name": "Environment",
-                            "Value": environment
-                        }
-                    ]
-                }
-            ]
-        )
-    except Exception as e:
-        print(f"Failed to emit health metric: {e}")
-    
-    return {
-        "statusCode": 200 if health_status["overall_status"] == "healthy" else 503,
-        "headers": {
-            "Content-Type": "application/json"
-        },
-        "body": json.dumps(health_status)
-    }
-'''
